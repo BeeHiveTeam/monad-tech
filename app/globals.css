@@ -1,0 +1,262 @@
+@import "tailwindcss";
+
+:root {
+  --gold: #C9A84C;
+  --gold-light: #E8C97A;
+  --gold-dim: #9B7F44;
+  --black: #080808;
+  --surface: #0F0F0D;
+  --surface2: #161612;
+  --surface3: #1E1E18;
+  --text: #F0EDE0;
+  --text-muted: #8A8870;
+  --border: rgba(201,168,76,0.15);
+  --border-hover: rgba(201,168,76,0.35);
+  --green: #4CAF6E;
+  --red: #E05252;
+}
+
+html { scroll-behavior: smooth; }
+
+body {
+  background: var(--black);
+  color: var(--text);
+  font-family: 'DM Sans', sans-serif;
+  font-weight: 300;
+  overflow-x: hidden;
+}
+
+/* Native <select> options inherit browser defaults — force dark theme so the
+   dropdown popup doesn't render white-with-black-text on top of our dark UI. */
+option {
+  background: var(--surface2);
+  color: var(--text);
+}
+input::placeholder, textarea::placeholder {
+  color: var(--text-muted);
+  opacity: 1;
+}
+
+/* Recharts Brush traveller labels default to fill:#666 which is close to
+   invisible on our surface. Force to muted text. Scoped by class to avoid
+   affecting other SVG text. */
+.recharts-brush-texts text { fill: var(--text-muted) !important; }
+
+.gold { color: var(--gold); }
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+.card-hover {
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+.card-hover:hover {
+  border-color: var(--border-hover);
+  box-shadow: 0 4px 24px rgba(201,168,76,0.08);
+}
+
+.mono {
+  font-family: 'DM Mono', monospace;
+}
+
+.badge-green {
+  background: rgba(76,175,110,0.12);
+  color: var(--green);
+  border: 1px solid rgba(76,175,110,0.25);
+  padding: 2px 10px;
+  border-radius: 20px;
+  font-size: 11px;
+  font-weight: 500;
+}
+.badge-gold {
+  background: rgba(201,168,76,0.12);
+  color: var(--gold);
+  border: 1px solid rgba(201,168,76,0.25);
+  padding: 2px 10px;
+  border-radius: 20px;
+  font-size: 11px;
+  font-weight: 500;
+}
+.badge-red {
+  background: rgba(224,82,82,0.12);
+  color: var(--red);
+  border: 1px solid rgba(224,82,82,0.25);
+  padding: 2px 10px;
+  border-radius: 20px;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+@keyframes pulse {
+  0%   { box-shadow: 0 0 0 0 rgba(76,175,110,0.5); }
+  70%  { box-shadow: 0 0 0 8px rgba(76,175,110,0); }
+  100% { box-shadow: 0 0 0 0 rgba(76,175,110,0); }
+}
+
+.pulse-dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--green);
+  animation: pulse 2s infinite;
+  display: inline-block;
+}
+
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: var(--surface); }
+::-webkit-scrollbar-thumb { background: rgba(201,168,76,0.2); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(201,168,76,0.4); }
+
+/* Table */
+table { border-collapse: collapse; width: 100%; table-layout: auto; }
+th {
+  font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase;
+  color: var(--text-muted); font-weight: 500;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+td {
+  padding: 14px 20px;
+  font-size: 13px;
+  border-bottom: 1px solid rgba(201,168,76,0.05);
+}
+tr:hover td { background: rgba(201,168,76,0.03); }
+
+/* TabNav — hide WebKit scrollbar on desktop while keeping overflow-scroll on narrow screens */
+.tab-nav::-webkit-scrollbar { display: none; }
+
+/* Resizable table — fixed layout + tighter cells so per-column widths are predictable */
+.resizable-table { table-layout: fixed; }
+.resizable-table th,
+.resizable-table td {
+  padding: 10px 12px;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+.resizable-table th { position: relative; }
+.col-resize {
+  position: absolute;
+  top: 0; right: 0; bottom: 0;
+  width: 6px;
+  cursor: col-resize;
+  user-select: none;
+  z-index: 2;
+}
+.col-resize::after {
+  content: '';
+  position: absolute;
+  top: 25%; bottom: 25%; right: 2px;
+  width: 1px;
+  background: rgba(201,168,76,0.15);
+  transition: background 0.15s;
+}
+.col-resize:hover::after,
+.col-resize.active::after {
+  background: var(--gold);
+  width: 2px;
+}
+
+/* Header baseline (desktop) */
+.site-header { padding: 16px 40px; }
+.site-main { max-width: 1280px; margin: 0 auto; padding: 32px 24px; }
+.net-label-short { display: none; }
+.net-label-full { display: inline; }
+
+/* Mobile */
+@media (max-width: 720px) {
+  .site-header {
+    padding: 12px 14px;
+    gap: 8px;
+  }
+  .site-logo { gap: 10px !important; }
+  .site-logo-svg { width: 30px !important; height: 30px !important; }
+  .site-logo-title { font-size: 17px !important; letter-spacing: 0.1em !important; }
+  .site-logo-sub { display: none; }
+
+  .site-main { padding: 20px 14px !important; }
+
+  .card { border-radius: 10px; }
+  .tab-link { padding: 10px 14px !important; font-size: 14px !important; }
+  th { padding: 10px 12px; font-size: 10px; }
+  td { padding: 10px 12px; font-size: 12px; }
+
+  .net-label-short { display: inline; }
+  .net-label-full { display: none; }
+  .net-btn { padding: 6px 10px !important; font-size: 11px !important; }
+
+  .live-time { display: none; }
+}
+
+@media (max-width: 420px) {
+  .site-header { padding: 10px 10px; }
+  .site-logo-title { font-size: 15px !important; }
+  .site-main { padding: 16px 10px !important; }
+  .card-pad { padding: 16px !important; }
+}
+
+/* /network page — responsive rows */
+.row-top10 {
+  display: grid;
+  grid-template-columns: 28px 1fr 100px 80px;
+  gap: 10px;
+  align-items: center;
+  padding: 5px 0;
+  font-family: 'DM Mono', monospace;
+  font-size: 11px;
+  border-bottom: 1px solid rgba(201,168,76,0.04);
+}
+.row-reorg {
+  display: grid;
+  grid-template-columns: 140px 120px 60px 1fr;
+  gap: 10px;
+  font-family: 'DM Mono', monospace;
+  font-size: 11px;
+  padding: 4px 0;
+  border-bottom: 1px solid rgba(201,168,76,0.04);
+}
+.row-valset {
+  display: grid;
+  grid-template-columns: 140px 90px 1fr 140px;
+  gap: 10px;
+  font-family: 'DM Mono', monospace;
+  font-size: 11px;
+  padding: 4px 0;
+  border-bottom: 1px solid rgba(201,168,76,0.04);
+}
+.grid-geo {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+}
+
+@media (max-width: 720px) {
+  .row-top10 {
+    grid-template-columns: 24px 1fr auto;
+    gap: 8px;
+    font-size: 10px;
+  }
+  .row-top10 > .col-share { display: none; }
+
+  .row-reorg {
+    grid-template-columns: 1fr auto;
+    gap: 4px 10px;
+    font-size: 10px;
+  }
+  .row-reorg > .col-time  { grid-column: 1 / -1; font-size: 9px; }
+  .row-reorg > .col-hash  { grid-column: 1 / -1; font-size: 9px; opacity: 0.7; }
+
+  .row-valset {
+    grid-template-columns: 1fr auto;
+    gap: 2px 10px;
+    padding: 8px 0;
+    font-size: 10px;
+  }
+  .row-valset > .col-time    { grid-column: 1 / -1; font-size: 9px; }
+  .row-valset > .col-type    { grid-row: 2; }
+  .row-valset > .col-moniker { grid-row: 2; text-align: right; }
+  .row-valset > .col-delta   { grid-column: 1 / -1; text-align: right; font-size: 10px; }
+
+  .grid-geo { grid-template-columns: 1fr; gap: 16px; }
+}
