@@ -1,0 +1,16 @@
+{
+  "name": "Monad Tech — Network Monitor",
+  "short_name": "Monad Tech",
+  "description": "Real-time Monad network validator statistics, parallel execution analytics, and incident timeline.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#080808",
+  "theme_color": "#080808",
+  "icons": [
+    {
+      "src": "/beehive-logo.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}
