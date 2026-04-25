@@ -193,6 +193,12 @@ Middleware in `middleware.ts` adds in-app rate limiting (300 req / min / IP). Cl
 
 ---
 
+## Documentation
+
+- **[`docs/METRICS.md`](docs/METRICS.md)** — full reference of every metric, badge, chart and parameter shown on the site. Written for newcomers (with glossary) as well as operators / delegators.
+
+---
+
 ## License
 
 MIT — see [`LICENSE`](LICENSE).
