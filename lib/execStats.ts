@@ -255,20 +255,37 @@ export function summarize(stats: ExecStat[]): ExecSummary {
       blocksWithRetries: 0, retriesShare: 0,
     };
   }
-  const rtpSorted = [...stats].map(s => s.rtp).sort((a, b) => a - b);
-  const blocksWithRetries = stats.filter(s => s.rt > 0).length;
-  const avg = (arr: number[]) => arr.reduce((a, x) => a + x, 0) / arr.length;
+  // Single pass — avoids spread `...array` which overflows the JS call stack
+  // when stats.length is large (24h range has ~200k blocks; V8 spread limit is
+  // ~125k arguments). Also avoids allocating separate arrays for each metric.
+  let rtpSum = 0, rtpPeak = 0;
+  let totSum = 0;
+  let tpseSum = 0, tpsePeak = 0;
+  let gpseSum = 0, gpsePeak = 0;
+  let blocksWithRetries = 0;
+  const rtpValues = new Array<number>(stats.length);
+  for (let i = 0; i < stats.length; i++) {
+    const s = stats[i];
+    rtpValues[i] = s.rtp;
+    rtpSum += s.rtp; if (s.rtp > rtpPeak) rtpPeak = s.rtp;
+    totSum += s.tot;
+    tpseSum += s.tpse; if (s.tpse > tpsePeak) tpsePeak = s.tpse;
+    gpseSum += s.gpse; if (s.gpse > gpsePeak) gpsePeak = s.gpse;
+    if (s.rt > 0) blocksWithRetries++;
+  }
+  rtpValues.sort((a, b) => a - b);
+  const n = stats.length;
   return {
-    count: stats.length,
-    rtpAvg: +avg(stats.map(s => s.rtp)).toFixed(2),
-    rtpPeak: +Math.max(...stats.map(s => s.rtp)).toFixed(2),
-    rtpP95: +rtpSorted[Math.floor(rtpSorted.length * 0.95)].toFixed(2),
-    totAvg: Math.round(avg(stats.map(s => s.tot))),
-    tpseAvg: Math.round(avg(stats.map(s => s.tpse))),
-    tpsePeak: Math.max(...stats.map(s => s.tpse)),
-    gpseAvg: Math.round(avg(stats.map(s => s.gpse))),
-    gpsePeak: Math.max(...stats.map(s => s.gpse)),
+    count: n,
+    rtpAvg: +(rtpSum / n).toFixed(2),
+    rtpPeak: +rtpPeak.toFixed(2),
+    rtpP95: +rtpValues[Math.floor(n * 0.95)].toFixed(2),
+    totAvg: Math.round(totSum / n),
+    tpseAvg: Math.round(tpseSum / n),
+    tpsePeak,
+    gpseAvg: Math.round(gpseSum / n),
+    gpsePeak,
     blocksWithRetries,
-    retriesShare: +((blocksWithRetries / stats.length) * 100).toFixed(2),
+    retriesShare: +((blocksWithRetries / n) * 100).toFixed(2),
   };
 }

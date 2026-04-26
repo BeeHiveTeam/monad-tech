@@ -140,6 +140,7 @@ interface NhStore {
   geoSummary: GeoSummary | null;
   prevValidatorSet: Map<string, ValidatorSnapshot> | null;
   setChangeEvents: SetChangeEvent[];
+  lastTipNumber: number | null;
 }
 const g = globalThis as unknown as { __monadNh__?: NhStore };
 if (!g.__monadNh__) {
@@ -151,12 +152,18 @@ if (!g.__monadNh__) {
     geoSummary: null,
     prevValidatorSet: null,
     setChangeEvents: [],
+    lastTipNumber: null,
   };
 }
 const S = g.__monadNh__!;
 
 const REORG_HISTORY_SIZE = 200;
-const BLOCK_HISTORY_KEEP = 200;
+const BLOCK_HISTORY_KEEP = 500;
+// Detector tick is 2s; at 0.4s block time that's ~5 new blocks per tick.
+// We backfill all blocks between previous tip and current tip so every block
+// has a recorded hash, and re-check the last REORG_DEPTH_CHECK blocks.
+const REORG_DEPTH_CHECK = 30;
+const REORG_BACKFILL_LIMIT = 50; // safety cap if we fall behind
 
 async function rpc<T>(method: string, params: unknown[] = []): Promise<T> {
   const res = await fetch(RPC_URL, {
@@ -184,17 +191,26 @@ export async function tickReorgDetector(): Promise<void> {
     // between reorg detector, tps collector, and /api/stats.
     const { getTip } = await import('./tipCache');
     const tip = await getTip();
-    recordBlock(tip.number, tip.hash);
 
-    // Collect depths we have historical hashes for, so we only batch what's
-    // actually actionable. No history → no reorg comparison possible.
-    const depthNums = [1, 2, 3]
-      .map(d => tip.number - d)
-      .filter(n => n >= 0 && S.blockHistory.has(n));
-    if (depthNums.length === 0) return;
+    // Determine which block numbers need RPC fetch:
+    //  1. New blocks since last tick (backfill so we have hashes for them)
+    //  2. Last REORG_DEPTH_CHECK blocks for re-comparison (detect reorgs)
+    const lastSeen = S.lastTipNumber ?? tip.number - 1;
+    const newCount = Math.min(tip.number - lastSeen, REORG_BACKFILL_LIMIT);
 
-    // Single batched HTTP POST instead of 1-3 sequential round-trips.
-    const body = depthNums.map((n, i) => ({
+    // Backfill range: newest first, capped at REORG_BACKFILL_LIMIT
+    const fetchNums = new Set<number>();
+    for (let d = 0; d < newCount; d++) fetchNums.add(tip.number - d);
+    // Re-check the last N blocks regardless of whether we have them
+    for (let d = 1; d <= REORG_DEPTH_CHECK; d++) {
+      if (tip.number - d >= 0) fetchNums.add(tip.number - d);
+    }
+
+    if (fetchNums.size === 0) return;
+
+    // Single batched HTTP POST for everything we need.
+    const nums = [...fetchNums];
+    const body = nums.map((n, i) => ({
       jsonrpc: '2.0', id: i,
       method: 'eth_getBlockByNumber',
       params: [`0x${n.toString(16)}`, false] as unknown[],
@@ -207,12 +223,17 @@ export async function tickReorgDetector(): Promise<void> {
     });
     if (!res.ok) return;
     const j = await res.json() as Array<{ id: number; result?: RpcBlock }>;
+
     for (const item of j) {
-      const n = depthNums[item.id];
+      const n = nums[item.id];
       const blk = item.result;
       if (typeof n !== 'number' || !blk) continue;
       const existing = S.blockHistory.get(n);
-      if (!existing) continue;
+      if (!existing) {
+        // First time seeing this block → record it (no reorg comparison possible)
+        recordBlock(n, blk.hash);
+        continue;
+      }
       if (blk.hash !== existing.hash) {
         const event: ReorgEvent = {
           ts: Date.now(), blockNumber: n,
@@ -224,6 +245,8 @@ export async function tickReorgDetector(): Promise<void> {
         writeReorgToInflux(event);    // fire-and-forget persistence
       }
     }
+
+    S.lastTipNumber = tip.number;
   } catch { /* next tick retries */ }
 }
 

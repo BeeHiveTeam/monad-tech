@@ -8,6 +8,7 @@ import TabNav from '@/components/TabNav';
 import { useNetwork } from '@/lib/useNetwork';
 import { NETWORKS } from '@/lib/networks';
 import { formatDistanceToNow } from 'date-fns';
+import DelegatorsPanel from '@/components/DelegatorsPanel';
 
 type Health = 'active' | 'slow' | 'missing' | 'unknown';
 
@@ -267,6 +268,8 @@ export default function ValidatorDetailPage() {
                   )}
                 </div>
               </div>
+              {/* Delegation activity — staking-precompile transactions targeting this address */}
+              <DelegatorsPanel address={data.address} />
             </>
           ) : null}
 

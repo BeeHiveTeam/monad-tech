@@ -196,6 +196,48 @@ tr:hover td { background: rgba(201,168,76,0.03); }
   .card-pad { padding: 16px !important; }
 }
 
+/* ── Mobile UX polish ────────────────────────────────────────────── */
+@media (max-width: 720px) {
+  /* Buttons: meet 44px minimum tap target (Apple HIG / Material guidelines) */
+  button, a[role="button"], .tab-link, .badge-gold, .badge-red, .badge-green {
+    min-height: 40px;
+    padding-top: 8px; padding-bottom: 8px;
+  }
+  /* Form controls wide enough to comfortably tap */
+  input[type="text"], input[type="search"], input[type="number"],
+  input[type="email"], select, textarea {
+    font-size: 16px !important;   /* prevents iOS zoom-on-focus */
+    min-height: 40px;
+  }
+  /* Horizontal scroll for tables that don't fit — keep them tabular instead
+     of collapsing into unreadable stacks */
+  .card > div:has(> table),
+  .card > .table-scroll {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  /* Chart heights trimmed on small screens */
+  .recharts-responsive-container { max-height: 220px !important; }
+  /* Footer text wraps cleanly */
+  .site-main > :last-child { word-break: break-word; }
+}
+
+/* Smooth font rendering on mobile — more important because the gold colour is
+   thin and harder to read at small sizes. */
+body {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+/* Never horizontal-scroll the whole page (guards against rogue overflow) */
+html, body { max-width: 100vw; overflow-x: hidden; }
+img, video { max-width: 100%; height: auto; }
+/* NOTE: do NOT apply `* { max-width: 100% }` — it breaks Recharts SVGs whose
+   children use widths computed from parent's bounding rect. When the chart
+   wrapper hasn't been measured yet (width=0), the universal rule cascades
+   max-width:0 to every SVG descendant and the chart vanishes. */
+
 /* /network page — responsive rows */
 .row-top10 {
   display: grid;

@@ -1,0 +1,20 @@
+# robots.txt for monad-tech.com
+# https://monad-tech.com/sitemap.xml
+
+User-agent: *
+Allow: /
+
+# Operator / admin views — not useful to crawlers
+Disallow: /node
+Disallow: /admin
+Disallow: /api/
+
+# Dynamic detail pages — allowed but low priority (crawl budget)
+# Allow: /validators/
+# Allow: /block/
+# Allow: /tx/
+
+Sitemap: https://monad-tech.com/sitemap.xml
+
+# Content signals (EU Directive 2019/790 compliant)
+Content-signal: search=yes, ai-input=yes, ai-train=yes

@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" width="1200" height="630">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#080808"/>
+      <stop offset="100%" stop-color="#0F0F0D"/>
+    </linearGradient>
+    <linearGradient id="gold" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#E8D080"/>
+      <stop offset="100%" stop-color="#C9A84C"/>
+    </linearGradient>
+    <pattern id="hex" x="0" y="0" width="60" height="52" patternUnits="userSpaceOnUse">
+      <polygon points="15,2 45,2 60,26 45,50 15,50 0,26" fill="none" stroke="rgba(201,168,76,0.06)" stroke-width="1"/>
+    </pattern>
+  </defs>
+
+  <rect width="1200" height="630" fill="url(#bg)"/>
+  <rect width="1200" height="630" fill="url(#hex)"/>
+
+  <!-- Big hex with B -->
+  <g transform="translate(100,140)">
+    <polygon points="175,10 325,92 325,258 175,340 25,258 25,92" fill="none" stroke="url(#gold)" stroke-width="8"/>
+    <text x="175" y="238" text-anchor="middle" font-family="Arial Black, sans-serif" font-size="160" font-weight="900" fill="url(#gold)">M</text>
+  </g>
+
+  <!-- Title block -->
+  <g transform="translate(520,180)">
+    <text x="0" y="0" font-family="Bebas Neue, Arial Black, sans-serif" font-size="84" letter-spacing="4" fill="#F0EDE0">MONAD TECH</text>
+    <text x="0" y="68" font-family="Bebas Neue, Arial, sans-serif" font-size="30" letter-spacing="6" fill="#C9A84C">NETWORK OBSERVABILITY</text>
+  </g>
+
+  <!-- Feature list -->
+  <g transform="translate(520,300)" font-family="DM Mono, monospace" font-size="22" fill="#F0EDE0">
+    <text x="0" y="0"><tspan fill="#C9A84C">◆</tspan>  parallel execution · retry_pct</text>
+    <text x="0" y="36"><tspan fill="#C9A84C">◆</tspan>  incident timeline · reorgs · stalls</text>
+    <text x="0" y="72"><tspan fill="#C9A84C">◆</tspan>  validator health scoring</text>
+    <text x="0" y="108"><tspan fill="#C9A84C">◆</tspan>  Nakamoto coefficient · peer geo</text>
+  </g>
+
+  <!-- URL bottom -->
+  <g transform="translate(100,560)" font-family="DM Mono, monospace">
+    <text x="0" y="0" font-size="26" fill="#C9A84C" letter-spacing="2">monad-tech.com</text>
+    <text x="1000" y="0" font-size="16" fill="#8A8870" letter-spacing="2">operated by BeeHive</text>
+  </g>
+</svg>

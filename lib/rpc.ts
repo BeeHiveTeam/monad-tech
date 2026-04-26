@@ -84,8 +84,13 @@ export async function getLatestBlocksBatched(
   const latest = parseInt(latestHex, 16);
 
   if (local) {
-    // Use JSON-RPC batching: one HTTP request per batch of 500
+    // Use JSON-RPC batching: one HTTP request per batch. Default batch=500.
+    // Between batches pause `pauseMs` (default 200ms for local) so a long
+    // multi-batch fetch (e.g. 5000-block validators refresh) doesn't saturate
+    // the RPC's triedb_env channel or block the Node.js event loop, which
+    // would in turn cause tpsCollector to skip ticks and burst-catch-up.
     const _batchSize = batchSize ?? 500;
+    const _pauseMs = pauseMs ?? 200;
     const all: unknown[] = [];
     for (let offset = 0; offset < count; offset += _batchSize) {
       const size = Math.min(_batchSize, count - offset);
@@ -95,6 +100,9 @@ export async function getLatestBlocksBatched(
       }));
       const results = await rpcBatch(network, requests);
       all.push(...results.filter(Boolean));
+      if (_pauseMs > 0 && offset + _batchSize < count) {
+        await new Promise(r => setTimeout(r, _pauseMs));
+      }
     }
     return all;
   }

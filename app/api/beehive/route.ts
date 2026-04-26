@@ -4,20 +4,32 @@ import { parsePrometheus, findOne } from '@/lib/prom-parser';
 export const dynamic = 'force-dynamic';
 
 const PROM_URL = process.env.PROM_URL || 'http://15.235.117.52:8889/metrics';
+const LOCAL_RPC_URL = process.env.MONAD_RPC_URL || 'https://testnet-rpc.monad.xyz';
 
 // Returns live infra stats for our own BeeHive validator node: client version,
 // block height, peer count, uptime, node identity. This is the data source for
 // the public-facing /beehive page.
 export async function GET() {
   try {
-    const res = await fetch(PROM_URL, {
-      signal: AbortSignal.timeout(5_000),
-      cache: 'no-store',
-    });
-    if (!res.ok) {
-      return NextResponse.json({ error: `Prometheus HTTP ${res.status}` }, { status: 502 });
+    const [promRes, rpcRes] = await Promise.allSettled([
+      fetch(PROM_URL, { signal: AbortSignal.timeout(5_000), cache: 'no-store' }),
+      // Our own RPC's tip is the truthful "current height" — the Prometheus
+      // metric `monad_execution_ledger_block_num` lags by 5-8 blocks due to
+      // otelcol scrape + journal propagation. Using RPC avoids showing a
+      // misleading "Δ -6 vs network" on a node that's actually in sync.
+      fetch(LOCAL_RPC_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_blockNumber', params: [] }),
+        signal: AbortSignal.timeout(5_000),
+        cache: 'no-store',
+      }),
+    ]);
+
+    if (promRes.status !== 'fulfilled' || !promRes.value.ok) {
+      return NextResponse.json({ error: `Prometheus unreachable` }, { status: 502 });
     }
-    const text = await res.text();
+    const text = await promRes.value.text();
     const samples = parsePrometheus(text);
 
     // Node identity lives in labels on monad_node_info
@@ -26,7 +38,21 @@ export async function GET() {
     const serviceName = nodeInfo?.labels?.service_name ?? null;
     const network = nodeInfo?.labels?.network ?? 'testnet';
 
-    const blockNum = findOne(samples, 'monad_execution_ledger_block_num')?.value ?? 0;
+    // Prometheus tells us committed-to-ledger height (slightly lagged by
+    // export pipeline). The RPC call above gives us the real-time tip.
+    const execLedgerHeight = findOne(samples, 'monad_execution_ledger_block_num')?.value ?? 0;
+
+    let rpcHeight = 0;
+    if (rpcRes.status === 'fulfilled' && rpcRes.value.ok) {
+      try {
+        const j = await rpcRes.value.json() as { result?: string };
+        if (j.result) rpcHeight = parseInt(j.result, 16);
+      } catch { /* fall through with 0 */ }
+    }
+    // Prefer the RPC height when available; fall back to Prometheus if RPC
+    // didn't respond (e.g. during a brief network blip).
+    const blockNum = rpcHeight > 0 ? rpcHeight : execLedgerHeight;
+
     const numCommits = findOne(samples, 'monad_execution_ledger_num_commits')?.value ?? 0;
     const numTxCommits = findOne(samples, 'monad_execution_ledger_num_tx_commits')?.value ?? 0;
     const peers = findOne(samples, 'monad_peer_disc_num_peers')?.value ?? 0;

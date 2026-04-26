@@ -1,16 +1,32 @@
 {
   "name": "Monad Tech — Network Monitor",
   "short_name": "Monad Tech",
-  "description": "Real-time Monad network validator statistics, parallel execution analytics, and incident timeline.",
+  "description": "Real-time Monad network observability — parallel execution metrics, validator health scoring, incident timeline.",
   "start_url": "/",
+  "scope": "/",
   "display": "standalone",
+  "orientation": "any",
   "background_color": "#080808",
   "theme_color": "#080808",
+  "categories": ["developer", "finance", "utilities"],
   "icons": [
     {
       "src": "/beehive-logo.svg",
       "sizes": "any",
-      "type": "image/svg+xml"
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/beehive-logo.svg",
+      "sizes": "192x192",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    },
+    {
+      "src": "/beehive-logo.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
     }
   ]
 }
