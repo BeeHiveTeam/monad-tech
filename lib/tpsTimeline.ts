@@ -5,7 +5,12 @@
 
 const RPC_URL = process.env.MONAD_RPC_URL || 'https://testnet-rpc.monad.xyz';
 const BUCKET_RETENTION_SEC = 86400;  // keep last 24h — supports all chart ranges
-const MAX_BLOCKS_PER_TICK = 50;      // safety cap: don't fetch more than this in one tick
+// Cap catch-up batches low (10, not 50). When the event loop is blocked by
+// other pollers (e.g. /api/validators 5000-block refresh) this collector can
+// skip ticks and then try to fetch 20-50 blocks in one burst. At monad-rpc
+// that burst is ~100×N internal channel sends → triedb_env overflow → WARN
+// storm. With cap 10 we accept minor TPS-chart data loss during overloads.
+const MAX_BLOCKS_PER_TICK = 10;
 
 interface TpsStore {
   buckets: Map<number, number>;       // unix second → tx count

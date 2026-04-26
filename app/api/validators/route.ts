@@ -7,11 +7,16 @@ import { setBlockCache } from '@/lib/block-cache';
 
 export const dynamic = 'force-dynamic';
 
-// 5000 blocks @ ~0.5s block time covers ~40 minutes of history —
-// enough to surface validators that take their turn as leader across a full rotation.
+// 1000 blocks @ ~0.4s block time ≈ 6-7 minutes of history. Previously 5000,
+// reduced 2026-04-25 because the 5000-block fetch (10 batches × 500 methods
+// in one JSON-RPC POST) caused periodic ~500-2500 WARN/min storms on
+// monad-rpc — each batch overflowed the validator's `triedb_env` channel
+// before it could drain. 1000 blocks still covers enough leader rotations
+// (200 active validators × ~0.4s = 80s per full rotation → 5+ rotations).
+// See: wiki ops/incidents/validators-bulk-fetch-burst-2026-04-25.md
 const FRESH_TTL_MS = 5 * 60_000;   // serve cache fresh for 5 min
 const STALE_TTL_MS = 20 * 60_000;  // then serve stale while revalidating in background
-const SAMPLE_BLOCKS = 5000;
+const SAMPLE_BLOCKS = 1000;
 
 interface CacheEntry {
   ts: number;
@@ -24,7 +29,11 @@ async function computeValidators(network: NetworkId) {
   const rpcUrl = process.env.MONAD_RPC_URL ?? NETWORKS[network].rpc;
   await ensureRegistryLoaded(rpcUrl);
 
-  const blocks = await getLatestBlocksBatched(network, SAMPLE_BLOCKS, false, 40, 1100);
+  // batch=50 (small) + default pauseMs=200ms → 20 batches × 50 methods ≈ 4-5s.
+  // The big-batch path (default 500) caused periodic triedb_env channel
+  // overflow on monad-rpc. Small batches let the channel drain between
+  // posts. UX impact: refresh takes 4-5s instead of 2-3s — still fine.
+  const blocks = await getLatestBlocksBatched(network, SAMPLE_BLOCKS, false, 50);
   setBlockCache(network, blocks as Parameters<typeof setBlockCache>[1]);
 
   const stats = new Map<string, {
@@ -107,7 +116,16 @@ async function computeValidators(network: NetworkId) {
 
   const validators = Array.from(stats.values())
     .map(v => {
-      const ageSeconds = Math.max(0, nowSec - v.lastBlockTs);
+      // `ageSeconds` = how stale is this validator's last block _relative to
+      // the newest block in our sample_ (NOT wall-clock now). This is the
+      // right reference because /api/validators background refresh can take
+      // 30-60 seconds — using wall-clock `nowSec` would penalise every
+      // validator by that refresh-duration delta even though block production
+      // was healthy at sample time. Consumers still see "live enough" if
+      // this number stays under expectedGap × 2.
+      const ageSeconds = v.lastBlockTs > 0
+        ? Math.max(0, newestTs - v.lastBlockTs)
+        : Math.max(0, nowSec - oldestTs);  // registry-only entries → window-span
 
       // Participation = produced / expected-within-active-window.
       // Active window = from first observed block (or window start if earlier)

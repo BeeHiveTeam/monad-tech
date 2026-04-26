@@ -47,10 +47,12 @@ export async function register() {
   const { tickTpsCollector } = await import('./lib/tpsTimeline');
 
   // Reorg detector: poll tip every 10s. Reorgs are rare and depth 1-3 at ~0.4s
-  // blocks = <1.2s window, which we catch on the next tick even at 10s cadence
-  // (the old hash stays in memory until overwritten, so we still notice).
-  // 2s was 5× what we need and contributed heavily to RPC amplification.
-  setTimeout(() => { tickReorgDetector(); setInterval(tickReorgDetector, 10_000); }, 5_000);
+  // 2s tick + depth-30 backfill: at 0.4s block time we see ~5 new blocks per
+  // tick. We backfill all new blocks (so every block has a recorded hash) and
+  // re-check the last 30 to detect reorgs that landed between ticks.
+  // The earlier 10s cadence missed reorgs because depth-1-3 only covers ~1.2s
+  // while 10s of producing = 25 blocks ahead of what we'd compared.
+  setTimeout(() => { tickReorgDetector(); setInterval(tickReorgDetector, 2_000); }, 5_000);
 
   // Validator set changes: check every 60s (stake doesn't churn fast)
   setTimeout(() => { tickValidatorSetTracker(); setInterval(tickValidatorSetTracker, 60_000); }, 15_000);
@@ -69,6 +71,16 @@ export async function register() {
   const { tickExecWriter } = await import('./lib/execStats');
   setTimeout(() => { tickExecWriter(); setInterval(tickExecWriter, 30_000); }, 25_000);
 
+  // Staking ops scanner — DISABLED 2026-04-24.
+  // With MAX_PER_TICK=100 and full=true block fetches every 15s, each tick
+  // fired one JSON-RPC batch with 30-100 methods, which the triedb_env
+  // channel can't drain — caused scraper rate to jump from ~4 req/sec to
+  // ~78 req/sec with WARN ×5.3. Re-enable only after redesign: either use
+  // eth_getLogs as a pre-filter (so we fetch only blocks with staking
+  // activity), or scan much slower (1-2 blocks/sec max, no batch catch-up).
+  // const { tickStakingScanner } = await import('./lib/stakingOps');
+  // setTimeout(() => { tickStakingScanner(); setInterval(tickStakingScanner, 15_000); }, 18_000);
+
   // Chain-stats poller: hits /api/stats every 15s so InfluxDB `monad_chain`
   // (tps, gas_gwei, block_util_pct) stays continuously populated regardless
   // of live viewer activity. Without this, /api/history has null gaps for
@@ -84,5 +96,5 @@ export async function register() {
   setTimeout(() => { statsPoll(); setInterval(statsPoll, 15_000); }, 12_000);
 
   // eslint-disable-next-line no-console
-  console.log(`[instrumentation] background pollers started: /api/node (10s), reorg (10s), tps-collector (1s), set-tracker (60s), geo (30m), exec-writer (30s), stats (15s)`);
+  console.log(`[instrumentation] background pollers started: /api/node (10s), reorg (2s, depth=30), tps-collector (1s), set-tracker (60s), geo (30m), exec-writer (30s), stats (15s)`);
 }
