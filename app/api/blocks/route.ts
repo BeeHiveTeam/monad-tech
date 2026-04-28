@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getLatestBlocksBatched } from '@/lib/rpc';
 import { NETWORKS, NetworkId } from '@/lib/networks';
+import { getLatestBlocks as getRingBlocks } from '@/lib/wsBlockStream';
 
 export const dynamic = 'force-dynamic';
 
@@ -12,20 +13,32 @@ export async function GET(req: NextRequest) {
   const network = raw as NetworkId;
 
   try {
-    // Fetch 20 latest blocks — 2 pages × 10/page covers 95% of casual browsing.
-    // Power users paginating past page 2 still get cached response. Dropped from
-    // 100 to reduce monad-rpc internal WARN amplification (each method call
-    // generates ~12 internal channel-sends; 100 methods/batch was dominant).
-    // `full=false` — we only need `transactions.length` for txCount.
+    // Primary path: read 20 latest blocks from the WebSocket-driven ring buffer.
+    // Each block was pushed via eth_subscribe(newHeads) and enriched with txCount
+    // via a single eth_getBlockByNumber(num, false). Zero RPC calls at request
+    // time — the heavy lifting is done by the background stream.
+    const ring = getRingBlocks(20);
+    if (ring.length >= 20) {
+      const blocks = ring.map(b => ({
+        number: b.number,
+        timestamp: b.timestamp,
+        txCount: b.txCount ?? 0,
+        gasUsed: b.gasUsed,
+        gasLimit: b.gasLimit,
+        miner: b.miner,
+        hash: b.hash,
+        size: b.size,
+      }));
+      return NextResponse.json({ blocks, source: 'ws-ring' }, {
+        headers: { 'Cache-Control': 'public, s-maxage=2, stale-while-revalidate=10' },
+      });
+    }
+
+    // Fallback path: ring not yet warm (PM2 restart, ws not yet connected).
+    // Falls back to RPC batch fetch — same behavior as pre-WS migration.
     const rawBlocks = await getLatestBlocksBatched(network, 20, false) as Array<{
-      number: string;
-      timestamp: string;
-      transactions: unknown[];
-      gasUsed: string;
-      gasLimit: string;
-      miner: string;
-      hash: string;
-      size: string;
+      number: string; timestamp: string; transactions: unknown[];
+      gasUsed: string; gasLimit: string; miner: string; hash: string; size: string;
     }>;
     const blocks = rawBlocks.map((b) => ({
       number: parseInt(b.number, 16),
@@ -37,13 +50,8 @@ export async function GET(req: NextRequest) {
       hash: b.hash,
       size: parseInt(b.size, 16),
     }));
-
-    // Blocks change every ~0.4s; let the edge cache briefly and serve stale
-    // while revalidating in the background. Browser always revalidates.
-    return NextResponse.json({ blocks }, {
-      headers: {
-        'Cache-Control': 'public, s-maxage=2, stale-while-revalidate=10',
-      },
+    return NextResponse.json({ blocks, source: 'rpc-fallback' }, {
+      headers: { 'Cache-Control': 'public, s-maxage=10, stale-while-revalidate=30' },
     });
   } catch (err) {
     return NextResponse.json({ error: String(err) }, { status: 500 });

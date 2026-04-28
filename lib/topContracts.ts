@@ -35,7 +35,10 @@ interface BlockTxs {
   tos: string[];
 }
 
-const BATCH_SIZE = 500;
+// BATCH_SIZE 500 → 25: per [[monad-rpc-pacing]] hard rule. Combined with ring
+// buffer (lib/wsBlockStream) — most recent ~1000 blocks served from RAM, RPC
+// fetch only for older blocks beyond ring window.
+const BATCH_SIZE = 25;
 
 async function fetchBlocksWithTxs(
   network: NetworkId,
@@ -43,9 +46,31 @@ async function fetchBlocksWithTxs(
 ): Promise<BlockTxs[]> {
   if (blockNumbers.length === 0) return [];
 
+  // First pass: serve any blocks already in the WebSocket ring buffer.
+  // The ring holds the last ~1000 blocks fully enriched (txs included).
+  // For 5m windows (~750 blocks) this covers 100%, eliminating all RPC.
+  // For 15m+ windows older blocks fall through to RPC fetch below.
+  const { getBlock: getRingBlock } = await import('./wsBlockStream');
   const out: BlockTxs[] = [];
-  for (let i = 0; i < blockNumbers.length; i += BATCH_SIZE) {
-    const chunk = blockNumbers.slice(i, i + BATCH_SIZE);
+  const missing: number[] = [];
+  for (const n of blockNumbers) {
+    const r = getRingBlock(n);
+    if (r && r.txs !== null) {
+      const tos: string[] = [];
+      for (const tx of r.txs) {
+        if (tx.to) tos.push(tx.to.toLowerCase());
+      }
+      out.push({ number: n, tos });
+    } else {
+      missing.push(n);
+    }
+  }
+  if (missing.length === 0) return out;
+
+  // Second pass: RPC fetch for blocks not in ring. Small batches (25) at
+  // ~200ms natural pacing — well under triedb_env channel drain rate.
+  for (let i = 0; i < missing.length; i += BATCH_SIZE) {
+    const chunk = missing.slice(i, i + BATCH_SIZE);
     const requests = chunk.map(n => ({
       method: 'eth_getBlockByNumber' as const,
       params: [`0x${n.toString(16)}`, true] as unknown[],
@@ -63,6 +88,11 @@ async function fetchBlocksWithTxs(
         if (tx.to) tos.push(tx.to.toLowerCase());
       }
       out.push({ number: chunk[j], tos });
+    }
+    // Pause between batches so the channel can drain. 200ms is the same
+    // pacing used by getLatestBlocksBatched for local RPC.
+    if (i + BATCH_SIZE < missing.length) {
+      await new Promise(r => setTimeout(r, 200));
     }
   }
   return out;

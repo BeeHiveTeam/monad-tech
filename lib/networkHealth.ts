@@ -159,10 +159,12 @@ const S = g.__monadNh__!;
 
 const REORG_HISTORY_SIZE = 200;
 const BLOCK_HISTORY_KEEP = 500;
-// Detector tick is 2s; at 0.4s block time that's ~5 new blocks per tick.
+// Detector tick is 4s; at 0.4s block time that's ~10 new blocks per tick.
 // We backfill all blocks between previous tip and current tip so every block
 // has a recorded hash, and re-check the last REORG_DEPTH_CHECK blocks.
-const REORG_DEPTH_CHECK = 30;
+// Reduced 30→15 to cut steady eth_getBlockByNumber pressure on monad-rpc
+// (was ~1050 methods/min steady, now ~375 — see [[monad-rpc-pacing]]).
+const REORG_DEPTH_CHECK = 15;
 const REORG_BACKFILL_LIMIT = 50; // safety cap if we fall behind
 
 async function rpc<T>(method: string, params: unknown[] = []): Promise<T> {
