@@ -2,6 +2,10 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getGasPrice, getLatestBlocksBatched } from '@/lib/rpc';
 import { getTipNumber } from '@/lib/tipCache';
 import { NETWORKS, NetworkId } from '@/lib/networks';
+import {
+  getLatestBlocks as getRingBlocks,
+  getTipNumber as getRingTip,
+} from '@/lib/wsBlockStream';
 
 export const dynamic = 'force-dynamic';
 
@@ -31,65 +35,80 @@ export async function GET(req: NextRequest) {
   if (!network) return NextResponse.json({ error: 'Invalid network' }, { status: 400 });
 
   try {
-    // Block number via shared 500ms cache (dedup with reorg detector + tps
-    // collector). Blocks fetched via JSON-RPC batch. Reduced from 20 to 10 —
-    // ~4s of block history at 0.4s block time is plenty for TPS/util averages
-    // and halves the contribution to monad-rpc WARN amplification.
+    // Primary path: tip + 10 most-recent blocks from the WebSocket ring.
+    // Zero RPC at request time — ring is filled by background newHeads subscription.
+    // Fallback to RPC batch if ring is cold (early after PM2 restart).
+    let recent: Array<{ ts: number; txCount: number; gasUsed: number; gasLimit: number }> = [];
+    let latestBlockNum = 0;
+    let latestBlockTs = 0;
+    let txInLatest = 0;
+    let ringSource = false;
+
+    const ring = getRingBlocks(10);
+    const ringTip = getRingTip();
+    if (ring.length >= 2 && ringTip) {
+      recent = ring.map(b => ({
+        ts: b.timestamp,
+        txCount: b.txCount ?? 0,
+        gasUsed: b.gasUsed,
+        gasLimit: b.gasLimit,
+      }));
+      latestBlockNum = ringTip;
+      latestBlockTs = ring[0]?.timestamp ?? 0;
+      txInLatest = ring[0]?.txCount ?? 0;
+      ringSource = true;
+    }
+
+    // gasPrice is not in newHeads push; still needs eth_gasPrice. One method
+    // per request, plus optional fallback for blocks.
+    const tipPromise = ringSource ? Promise.resolve(latestBlockNum) : getTipNumber();
+    const blocksPromise = ringSource
+      ? Promise.resolve([] as unknown[])
+      : getLatestBlocksBatched(network, 10, false);
     const [blockNumber, gasPrice, recentBlocks] = await Promise.allSettled([
-      getTipNumber(),
+      tipPromise,
       getGasPrice(network),
-      getLatestBlocksBatched(network, 10, false),
+      blocksPromise,
     ]);
 
-    const blocks = (recentBlocks.status === 'fulfilled' ? recentBlocks.value : []) as Array<{
-      timestamp: string;
-      transactions?: unknown[];
-      gasUsed: string;
-      gasLimit: string;
-    }>;
-    const latestBlock = blocks[0] ?? null;
-
-    // Compute TPS, block time, avg gas utilization from recent blocks
-    let tps = 0;
-    let avgBlockTime = 0;
-    let avgGasUtilization = 0;
-    if (blocks.length >= 2) {
-      // Use all 20 blocks — at ~0.5s block time that's ~10s of data, enough
-      // for sub-second accuracy with integer-second timestamps.
-      const recent = blocks.map((b) => ({
+    if (!ringSource) {
+      const blocks = (recentBlocks.status === 'fulfilled' ? recentBlocks.value : []) as Array<{
+        timestamp: string; transactions?: unknown[]; gasUsed: string; gasLimit: string;
+      }>;
+      const latestBlock = blocks[0] ?? null;
+      recent = blocks.map(b => ({
         ts: parseInt(b.timestamp, 16),
         txCount: Array.isArray(b.transactions) ? b.transactions.length : 0,
         gasUsed: parseInt(b.gasUsed, 16),
         gasLimit: parseInt(b.gasLimit, 16),
       }));
+      latestBlockNum = blockNumber.status === 'fulfilled' ? Number(blockNumber.value) : 0;
+      latestBlockTs = latestBlock ? parseInt(latestBlock.timestamp, 16) : 0;
+      txInLatest = latestBlock
+        ? (Array.isArray(latestBlock.transactions) ? latestBlock.transactions.length : 0)
+        : 0;
+    }
 
-      // Monad produces blocks every ~500ms, but RPC timestamps are integer seconds.
-      // Per-block intervals would alternate 0/1s — meaningless. Use total span / count.
-      const totalTx = recent.reduce((s: number, b) => s + b.txCount, 0);
+    // Compute TPS, block time, avg gas utilization from recent blocks
+    let tps = 0;
+    let avgBlockTime = 0;
+    let avgGasUtilization = 0;
+    if (recent.length >= 2) {
+      // Monad blocks ~0.5s but RPC timestamps are integer seconds — use total span / count
+      const totalTx = recent.reduce((s, b) => s + b.txCount, 0);
       const totalTime = recent[0].ts - recent[recent.length - 1].ts;
       avgBlockTime = recent.length > 1 && totalTime > 0
         ? totalTime / (recent.length - 1)
         : 0;
       tps = totalTime > 0 ? totalTx / totalTime : 0;
 
-      const utilizations = recent
-        .filter(b => b.gasLimit > 0)
-        .map(b => b.gasUsed / b.gasLimit);
+      const utilizations = recent.filter(b => b.gasLimit > 0).map(b => b.gasUsed / b.gasLimit);
       avgGasUtilization = utilizations.length
         ? (utilizations.reduce((a, b) => a + b, 0) / utilizations.length) * 100
         : 0;
     }
 
-    const latestBlockNum = blockNumber.status === 'fulfilled' ? blockNumber.value : 0;
-    const gasPriceGwei = gasPrice.status === 'fulfilled'
-      ? Number(gasPrice.value) / 1e9
-      : 0;
-
-    const txInLatest = latestBlock
-      ? (Array.isArray(latestBlock.transactions) ? latestBlock.transactions.length : 0)
-      : 0;
-
-    const latestBlockTs = latestBlock ? parseInt(latestBlock.timestamp, 16) : 0;
+    const gasPriceGwei = gasPrice.status === 'fulfilled' ? Number(gasPrice.value) / 1e9 : 0;
     const nowSec = Math.floor(Date.now() / 1000);
     const secondsSinceLastBlock = latestBlockTs ? nowSec - latestBlockTs : 999;
 
@@ -162,6 +181,7 @@ export async function GET(req: NextRequest) {
         state: health,
         reason: healthReason,
       },
+      source: ringSource ? 'ws-ring' : 'rpc-fallback',
     });
   } catch (err) {
     return NextResponse.json({ error: String(err) }, { status: 500 });

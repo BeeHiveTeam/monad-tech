@@ -46,13 +46,14 @@ export async function register() {
   } = await import('./lib/networkHealth');
   const { tickTpsCollector } = await import('./lib/tpsTimeline');
 
-  // Reorg detector: poll tip every 10s. Reorgs are rare and depth 1-3 at ~0.4s
-  // 2s tick + depth-30 backfill: at 0.4s block time we see ~5 new blocks per
-  // tick. We backfill all new blocks (so every block has a recorded hash) and
-  // re-check the last 30 to detect reorgs that landed between ticks.
-  // The earlier 10s cadence missed reorgs because depth-1-3 only covers ~1.2s
-  // while 10s of producing = 25 blocks ahead of what we'd compared.
-  setTimeout(() => { tickReorgDetector(); setInterval(tickReorgDetector, 2_000); }, 5_000);
+  // Reorg detector: 4s tick + depth-15 backfill. At 0.4s block time we see ~10
+  // new blocks per tick — depth-15 covers all of them plus a 5-block safety
+  // margin. Reduced from 2s/depth-30 (= 35 methods/2s = ~1050 methods/min) to
+  // 4s/depth-15 (= 25 methods/4s = ~375 methods/min, -64%) after tcpdump
+  // attribution showed steady eth_getBlockByNumber load was dominant cause of
+  // monad-rpc triedb_env channel overflow. Reorgs at depth >15 don't happen
+  // on Monad testnet historically (always depth 1-3).
+  setTimeout(() => { tickReorgDetector(); setInterval(tickReorgDetector, 4_000); }, 5_000);
 
   // Validator set changes: check every 60s (stake doesn't churn fast)
   setTimeout(() => { tickValidatorSetTracker(); setInterval(tickValidatorSetTracker, 60_000); }, 15_000);
@@ -70,6 +71,23 @@ export async function register() {
   // /api/exec-stats to serve ranges wider than Loki's practical 15-min window.
   const { tickExecWriter } = await import('./lib/execStats');
   setTimeout(() => { tickExecWriter(); setInterval(tickExecWriter, 30_000); }, 25_000);
+
+  // Anomaly detectors: scrape Prometheus every 30s and emit incidents for
+  // state-root mismatches, state-sync transitions, consensus stress (TC
+  // ratio over 5min), sustained vote-delay p99, and local-vs-reference RPC
+  // tip lag. Persists to InfluxDB `monad_anomalies` so events survive PM2
+  // restarts. Surfaced in the public /incidents timeline.
+  const { tickAnomalyDetectors } = await import('./lib/anomalyDetectors');
+  setTimeout(() => { tickAnomalyDetectors(); setInterval(tickAnomalyDetectors, 30_000); }, 35_000);
+
+  // WebSocket block stream: open one persistent ws:// connection to monad-rpc,
+  // subscribe to newHeads, fill an in-RAM ring buffer (last 1000 blocks).
+  // Replaces polling-based block fetches that overflowed the triedb_env
+  // channel (see [[rpc-warn-storm-2026-04-26]] and [[websocket-migration-2026-04-27]]).
+  // Each push triggers ONE eth_getBlockByNumber(num, false) for txCount
+  // enrichment — single method per block, naturally smooth-paced (~150/min).
+  const { startWsBlockStream } = await import('./lib/wsBlockStream');
+  setTimeout(() => { startWsBlockStream(); }, 8_000);
 
   // Staking ops scanner — DISABLED 2026-04-24.
   // With MAX_PER_TICK=100 and full=true block fetches every 15s, each tick
@@ -96,5 +114,5 @@ export async function register() {
   setTimeout(() => { statsPoll(); setInterval(statsPoll, 15_000); }, 12_000);
 
   // eslint-disable-next-line no-console
-  console.log(`[instrumentation] background pollers started: /api/node (10s), reorg (2s, depth=30), tps-collector (1s), set-tracker (60s), geo (30m), exec-writer (30s), stats (15s)`);
+  console.log(`[instrumentation] background pollers started: /api/node (10s), reorg (4s, depth=15), tps-collector (1s), set-tracker (60s), geo (30m), exec-writer (30s), stats (15s), anomaly-detectors (30s), ws-block-stream (push)`);
 }
