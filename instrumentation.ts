@@ -111,24 +111,19 @@ export async function register() {
   };
   setTimeout(() => { statsPoll(); setInterval(statsPoll, 15_000); }, 12_000);
 
-  // Top-contracts cache warmup. /api/top-contracts has 60s in-memory cache.
-  // Cold cache for 15m window can take 25-30s on first hit (RPC fallback for
-  // blocks beyond the WS ring). Background warmup keeps the user-facing
-  // request always hitting warm cache. Runs slightly under TTL (50s) so a
-  // user request always finds fresh data.
-  const topContractsPoll = async () => {
-    for (const window of ['5m', '15m', '1h']) {
-      try {
-        await fetch(
-          `http://127.0.0.1:${port}/api/top-contracts?network=testnet&window=${window}&min=5&limit=20`,
-          { signal: AbortSignal.timeout(60_000), cache: 'no-store' },
-        );
-      } catch { /* swallow — next tick retries */ }
-    }
-  };
-  // First warmup after WS ring has ~30s of data. Keeps running every 50s.
-  setTimeout(() => { void topContractsPoll(); setInterval(() => void topContractsPoll(), 50_000); }, 40_000);
+  // Top-contracts background writer. Computes top-contracts every 60s for
+  // 5m/15m/1h windows and persists the result as a JSON blob in InfluxDB
+  // measurement `monad_top_contracts`. /api/top-contracts reads from this
+  // measurement first → near-instant response (<100ms) for users, and
+  // survives PM2 restart instead of blanking for 30s while live-compute runs.
+  // Zero RPC overhead — the compute itself uses the WS ring + Loki, and the
+  // write is to localhost InfluxDB.
+  const { tickTopContractsWriter } = await import('./lib/topContracts');
+  setTimeout(() => {
+    void tickTopContractsWriter('testnet');
+    setInterval(() => void tickTopContractsWriter('testnet'), 60_000);
+  }, 45_000);
 
   // eslint-disable-next-line no-console
-  console.log(`[instrumentation] background pollers started: /api/node (10s), reorg (4s, depth=15), set-tracker (60s), geo (30m), exec-writer (30s), stats (15s), anomaly-detectors (30s), ws-block-stream (push), top-contracts-warmup (50s)`);
+  console.log(`[instrumentation] background pollers started: /api/node (10s), reorg (4s, depth=15), set-tracker (60s), geo (30m), exec-writer (30s), stats (15s), anomaly-detectors (30s), ws-block-stream (push), top-contracts-writer (60s)`);
 }

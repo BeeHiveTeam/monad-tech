@@ -27,11 +27,13 @@ const WS_URL = process.env.MONAD_WS_URL ?? 'ws://15.235.117.52:8081';
 const HTTP_RPC = process.env.MONAD_RPC_URL ?? 'http://15.235.117.52:8080';
 const INFLUX_URL = process.env.INFLUX_URL ?? 'https://localhost:8086';
 const INFLUX_DB = process.env.INFLUX_DB ?? 'monad';
-const RING_SIZE = 2500;        // ~16-17 min @ 0.4s block time — covers 15m
-                               // window of /api/top-contracts fully (was 1000:
-                               // 15m needed ~2200 blocks, 1200 outside ring →
-                               // 27s cold-cache fetch via RPC fallback).
-                               // Memory: 2500 × ~1.7KB = ~4MB ring.
+const RING_SIZE = 9000;        // ~60 min @ 0.4s block time — covers 1h window
+                               // of /api/top-contracts fully once ring is warm.
+                               // Was 2500 (covered only 15m). Memory cost:
+                               // 9000 × ~1.7KB ≈ 15MB. Trivial vs the alternative
+                               // (RPC fallback for 1h takes 60-90s and blocks
+                               // background writer). After 60min uptime all 3
+                               // windows (5m/15m/1h) serve from RAM, zero RPC.
 const RECONNECT_MIN_MS = 1_000;
 const RECONNECT_MAX_MS = 30_000;
 const RECONNECT_BACKOFF = 1.5;

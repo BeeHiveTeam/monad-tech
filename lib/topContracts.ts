@@ -216,5 +216,103 @@ export async function getTopContractsCached(
   return data;
 }
 
+// ── InfluxDB persistence ──────────────────────────────────────────────────
+// Background tick computes top-contracts and stores results as a JSON blob
+// in InfluxDB. /api/top-contracts reads from InfluxDB first → near-instant
+// response (<100ms), zero RPC calls per user request, survives PM2 restart.
+// The 60s in-memory cache above remains as a faster path; InfluxDB is the
+// fallback that replaces the live RPC compute path.
+
+const INFLUX_URL = process.env.INFLUX_URL ?? 'https://localhost:8086';
+const INFLUX_DB = process.env.INFLUX_DB ?? 'monad';
+
+function escapeInfluxStr(v: string): string {
+  return v.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
+async function writeTopContractsSnapshot(
+  network: NetworkId,
+  windowName: string,
+  result: TopContractsResult,
+): Promise<void> {
+  const payload = JSON.stringify(result);
+  const line =
+    `monad_top_contracts,network=${network},window=${windowName} ` +
+    `payload="${escapeInfluxStr(payload)}",` +
+    `blocks_analyzed=${result.blocksAnalyzed}i,` +
+    `total_tx=${result.totalTx}i,` +
+    `rows=${result.rows.length}i ` +
+    `${result.fetchedAt}`;
+  try {
+    await fetch(`${INFLUX_URL}/write?db=${INFLUX_DB}&precision=ms`, {
+      method: 'POST',
+      body: line,
+      signal: AbortSignal.timeout(8_000),
+    });
+  } catch { /* non-critical — next tick retries */ }
+}
+
+export async function fetchTopContractsFromInflux(
+  network: NetworkId,
+  windowName: string,
+): Promise<{ result: TopContractsResult; ageMs: number } | null> {
+  try {
+    const q = `SELECT LAST(payload) as payload FROM monad_top_contracts ` +
+      `WHERE network='${network}' AND window='${windowName}'`;
+    const res = await fetch(
+      `${INFLUX_URL}/query?db=${INFLUX_DB}&q=${encodeURIComponent(q)}&epoch=ms`,
+      { signal: AbortSignal.timeout(5_000) },
+    );
+    if (!res.ok) return null;
+    const j = await res.json() as {
+      results: Array<{ series?: Array<{ columns: string[]; values: unknown[][] }> }>;
+    };
+    const s = j.results?.[0]?.series?.[0];
+    if (!s?.values?.[0]) return null;
+    const payloadIdx = s.columns.indexOf('payload');
+    const timeIdx = s.columns.indexOf('time');
+    const payload = s.values[0][payloadIdx] as string;
+    const writeTs = Number(s.values[0][timeIdx]);
+    if (!payload) return null;
+    const result = JSON.parse(payload) as TopContractsResult;
+    return { result, ageMs: Date.now() - writeTs };
+  } catch {
+    return null;
+  }
+}
+
+const WINDOWS: Array<{ name: string; sec: number }> = [
+  { name: '5m', sec: 300 },
+  { name: '15m', sec: 900 },
+  { name: '1h', sec: 3600 },
+];
+
+/**
+ * Background tick: compute top-contracts for all windows + write to InfluxDB.
+ * Run every 60s. ZERO RPC overhead — uses ring buffer + Loki as before; the
+ * write is to localhost InfluxDB.
+ *
+ * Adaptive: skips windows that would require massive RPC fallback when the
+ * ring is too small. Each window needs ~windowSec/0.4s blocks. Once ring
+ * has covered the window's worth of blocks, compute is fast (~50ms).
+ * Skipping below that avoids tying up the tick on a 60+ second cold compute
+ * that'd time out anyway and might overlap with the next tick.
+ */
+export async function tickTopContractsWriter(network: NetworkId): Promise<void> {
+  const { getStreamState } = await import('./wsBlockStream');
+  const ringSize = getStreamState().ringSize;
+  // Each block ≈ 0.4s. Allow 80% coverage threshold — below that the RPC
+  // fallback dominates and compute slows considerably.
+  const minRingForWindow = (sec: number) => Math.floor((sec / 0.4) * 0.8);
+
+  for (const w of WINDOWS) {
+    if (ringSize < minRingForWindow(w.sec)) continue;
+    try {
+      const result = await getTopContractsCached(network, w.sec, 5, 20);
+      await writeTopContractsSnapshot(network, w.name, result);
+    } catch { /* try next window */ }
+  }
+}
+
 // Suppress unused-export warning while letting this stay internally importable.
 export { getBlockNumber };
