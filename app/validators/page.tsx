@@ -388,6 +388,19 @@ export default function ValidatorsPage() {
                   >
                     ↔ RESET COLUMNS
                   </button>
+                  <button
+                    onClick={() => router.push('/validators/compare')}
+                    title="Compare 2-5 validators side-by-side"
+                    style={{
+                      height: 28, padding: '0 12px',
+                      fontSize: 10, letterSpacing: '0.08em',
+                      background: 'transparent', color: 'var(--gold)',
+                      border: '1px solid var(--gold)', borderRadius: 6,
+                      cursor: 'pointer', fontFamily: 'DM Mono, monospace',
+                    }}
+                  >
+                    ⇄ COMPARE
+                  </button>
                 </div>
                 <input
                   type="text"
