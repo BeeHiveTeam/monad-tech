@@ -6,7 +6,9 @@ type IncidentType =
   | 'reorg'
   | 'validator_removed' | 'validator_added' | 'stake_decrease'
   | 'retry_spike' | 'block_stall'
-  | 'critical_log';
+  | 'critical_log'
+  | 'state_root_mismatch' | 'state_sync_active'
+  | 'consensus_stress' | 'vote_delay_high' | 'tip_lag';
 
 interface Incident {
   id: string;
@@ -55,6 +57,11 @@ const TYPE_ICON: Record<IncidentType, string> = {
   retry_spike: '↯',
   block_stall: '⏸',
   critical_log: '!',
+  state_root_mismatch: '⊗',
+  state_sync_active: '⟳',
+  consensus_stress: '⚡',
+  vote_delay_high: '⏱',
+  tip_lag: '↧',
 };
 
 const TYPE_LABEL: Record<IncidentType, string> = {
@@ -65,6 +72,11 @@ const TYPE_LABEL: Record<IncidentType, string> = {
   retry_spike: 'Retry spike',
   block_stall: 'Block stall',
   critical_log: 'Critical log',
+  state_root_mismatch: 'State root mismatch',
+  state_sync_active: 'State sync',
+  consensus_stress: 'Consensus stress',
+  vote_delay_high: 'Vote delay high',
+  tip_lag: 'Tip lag',
 };
 
 function fmtTime(ms: number): string {
@@ -126,7 +138,7 @@ export default function IncidentTimeline() {
             INCIDENT TIMELINE
           </span>
           <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-            reorgs · validator churn · retry spikes · block stalls · critical logs
+            reorgs · validator churn · retry spikes · block stalls · critical logs · state root · state sync · consensus stress · vote delay · tip lag
           </span>
         </div>
         {data && (
@@ -294,9 +306,11 @@ export default function IncidentTimeline() {
       )}
 
       <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 12, lineHeight: 1.5 }}>
-        Sources: <strong>reorgs</strong> + <strong>validator churn</strong> (in-memory since service start) ·
+        Sources: <strong>reorgs</strong> + <strong>validator churn</strong> + <strong>node anomalies</strong> (InfluxDB persisted) ·
         {' '}<strong>retry spikes</strong> + <strong>block stalls</strong> (Loki, last 15min only for wider ranges) ·
         {' '}<strong>critical logs</strong> (ERROR/FATAL from monad-execution & monad-bft).
+        {' '}Anomaly detectors poll Prometheus every 30s for state-root mismatches, state-sync transitions,
+        TC ratio (consensus stress), vote-delay p99, and local-vs-reference RPC tip lag.
       </div>
     </div>
   );

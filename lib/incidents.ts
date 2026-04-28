@@ -21,6 +21,7 @@ import {
   getReorgState, getSetChanges,
   fetchReorgsFromInflux, fetchSetChangesFromInflux,
 } from './networkHealth';
+import { fetchAnomaliesFromInflux } from './anomalyDetectors';
 
 const LOKI_URL = process.env.LOKI_URL || 'http://127.0.0.1:3100';
 
@@ -29,7 +30,9 @@ export type IncidentType =
   | 'reorg'
   | 'validator_removed' | 'validator_added' | 'stake_decrease'
   | 'retry_spike' | 'block_stall'
-  | 'critical_log';
+  | 'critical_log'
+  | 'state_root_mismatch' | 'state_sync_active'
+  | 'consensus_stress' | 'vote_delay_high' | 'tip_lag';
 
 export interface Incident {
   id: string;              // stable-ish key for React list
@@ -248,6 +251,29 @@ function truncate(s: string, n: number): string {
   return clean.length <= n ? clean : clean.slice(0, n - 1) + '…';
 }
 
+/**
+ * Anomaly events from `lib/anomalyDetectors.ts`. These are written to
+ * InfluxDB measurement `monad_anomalies` by the background tick and read
+ * back here. Types: state_root_mismatch · state_sync_active ·
+ * consensus_stress · vote_delay_high · tip_lag.
+ */
+export async function collectAnomalies(sinceMs: number): Promise<Incident[]> {
+  const windowSec = Math.ceil((Date.now() - sinceMs) / 1000);
+  const persisted = await fetchAnomaliesFromInflux(windowSec);
+  if (!persisted) return [];
+  return persisted
+    .filter(e => e.ts >= sinceMs)
+    .map(e => ({
+      id: `anom-${e.type}-${e.ts}`,
+      ts: e.ts,
+      severity: e.severity,
+      type: e.type as IncidentType,
+      title: e.title,
+      detail: e.detail,
+      meta: e.meta,
+    }));
+}
+
 // -- Orchestrator -------------------------------------------------------------
 
 export interface IncidentFeed {
@@ -264,15 +290,16 @@ export async function buildIncidentFeed(
 ): Promise<IncidentFeed> {
   const sinceMs = Date.now() - rangeSeconds * 1000;
 
-  const [retries, stalls, logs, reorgs, valset] = await Promise.all([
+  const [retries, stalls, logs, reorgs, valset, anomalies] = await Promise.all([
     detectRetrySpikes(rangeSeconds),
     detectBlockStalls(rangeSeconds),
     detectCriticalLogs(rangeSeconds),
     collectReorgs(sinceMs),
     collectValidatorSetChanges(sinceMs),
+    collectAnomalies(sinceMs),
   ]);
 
-  let incidents = [...reorgs, ...valset, ...retries, ...stalls, ...logs];
+  let incidents = [...reorgs, ...valset, ...retries, ...stalls, ...logs, ...anomalies];
   if (severityFilter) {
     incidents = incidents.filter(i => i.severity === severityFilter);
   }
@@ -282,6 +309,8 @@ export async function buildIncidentFeed(
   const byType: Record<IncidentType, number> = {
     reorg: 0, validator_removed: 0, validator_added: 0, stake_decrease: 0,
     retry_spike: 0, block_stall: 0, critical_log: 0,
+    state_root_mismatch: 0, state_sync_active: 0,
+    consensus_stress: 0, vote_delay_high: 0, tip_lag: 0,
   };
   for (const i of incidents) {
     counts[i.severity]++;
