@@ -5,7 +5,7 @@
 // cached prerender doesn't scream OFFLINE for 200-1000ms before hydration.
 import { useState, useEffect, useCallback, useRef } from 'react';
 import {
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Brush,
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from 'recharts';
 import HexBg from '@/components/HexBg';
 import SiteHeader from '@/components/SiteHeader';
@@ -143,6 +143,11 @@ export default function Home() {
       // TPS mode uses the dedicated per-second collector with bucket
       // aggregation: ~600 bars for long ranges (6h/12h/24h), physical max
       // (300/900) for short ranges limited by 1s block-timestamp granularity.
+      // NOTE: long ranges show blank chart for the first hours after PM2
+      // restart because tickTpsCollector buffer is RAM-only. Live with it
+      // for now — routing to /api/history caused unrelated WARN regression
+      // on monad-rpc (see 2026-04-27 16:40 UTC revert). Persisting per-second
+      // buckets to InfluxDB is the long-term fix.
       if (mode === 'tps') {
         const res = await fetch(`/api/tps-timeline?range=${r}`, { cache: 'no-store' });
         const json = await res.json() as {
@@ -600,14 +605,6 @@ function ChainChart({
               }
               return <g>{squares}</g>;
             }} />
-            <Brush
-              dataKey="time"
-              height={22}
-              stroke="rgba(201,168,76,0.2)"
-              fill="rgba(8,8,8,0.6)"
-              travellerWidth={6}
-              tickFormatter={() => ''}
-            />
           </BarChart>
         </ResponsiveContainer>
       )}
