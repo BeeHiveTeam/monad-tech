@@ -36,10 +36,11 @@ The goal: be the single dashboard where an operator can diagnose "is my node lag
 - Latest blocks + transactions with pagination + search
 
 ### Validators
-- 316-row sortable table
+- 309-row sortable table (197 in active set, 112 registered-but-not-producing or unregistered miners)
 - Filter: `REGISTERED ONLY` toggle (hides block producers without a matched on-chain authAddress)
 - Score = 40% health + 40% uptime + 20% recency, with 0.7× penalty for unregistered
 - Columns: moniker · address · stake · commission · score · health · uptime · blocks · share · txs · last-block
+- **Stake-weighted participation**: short-window (`participationPct`, 500-block sample) and long-window (`participationLong`, cumulative WS aggregator). Long-window is statistically stable after ~30 min of process runtime.
 
 ### Network Health
 - Nakamoto coefficient breakdown
@@ -48,7 +49,9 @@ The goal: be the single dashboard where an operator can diagnose "is my node lag
 - Validator set changes log
 
 ### Incidents
-- Unified feed: **reorg** · **validator_added/removed/stake_decrease** · **retry_spike** · **block_stall** · **critical_log**
+- Unified feed of **12 event types**:
+  - **Standard**: reorg · validator_added/removed/stake_decrease · retry_spike · block_stall · critical_log
+  - **Anomaly detectors** (Monad-specific, edge-triggered): state_root_mismatch · state_sync_active · consensus_stress · vote_delay_high · tip_lag
 - Filter by severity (all / critical / warn / info)
 - Filter by range (1h / 6h / 12h / 24h / 7d)
 - Persistent: survives PM2 restarts (InfluxDB-backed)
@@ -63,37 +66,52 @@ The goal: be the single dashboard where an operator can diagnose "is my node lag
 
 ## Architecture
 
+The hot path is **push-based, not polling.** A persistent WebSocket subscription to
+`monad-rpc`'s `eth_subscribe(newHeads)` fills a 1000-block ring buffer in RAM.
+Every "live tip" endpoint reads from this ring at request time — zero RPC calls
+per user request. (Migration story: see `feat(rpc): migrate from polling to
+WebSocket push`. Eliminated 30,000+ WARN/30min on monad-rpc's triedb_env channel.)
+
 ```
-                  ┌─── /api/stats, /api/blocks, /api/transactions
-                  │    (JSON-RPC batched, tip-cached 500ms)
-                  │
-  Monad testnet   ├─── /api/tps-timeline (per-second collector, 1-Hz poll)
-  RPC node        │
-                  ├─── /api/validators (5000-block sample + staking-precompile
-                  │    enumeration via eth_call batch)
-                  │
-                  └─── /api/network-health (tip-hash sweep for reorgs)
-
-                       ┌─── /api/exec-stats       (retry_pct, exec breakdown)
-  Loki (logs)    ──────┼─── /api/top-contracts    (hot contracts by retry)
-                       └─── /api/incidents        (critical logs)
-
-  Prometheus     ──────┼─── /api/node  (host probes, services, event counters)
-  (otelcol)            └─── /api/beehive  (client version, height, peers)
-
-  InfluxDB       ──────┬─── /api/history            (chain-metric aggregates)
-  (persistence)        ├─── /api/exec-stats >15m    (retry_pct long-range)
-                       ├─── /api/incidents >15m     (persisted reorgs + valset)
-                       └─── /api/analytics/summary  (site analytics)
+   Monad validator
+   ───────────────
+   monad-execution  ──── shared-memory event ring (642 MB, hugepages)
+                                     │
+   monad-rpc :8081 ──── eth_subscribe(newHeads) bridge
+                                     │ ws://, push every ~0.4s
+                                     ▼
+   ┌──────────────────────────────────────────────────────────┐
+   │  monad-stats (this dashboard)                            │
+   │                                                          │
+   │  lib/wsBlockStream.ts                                    │
+   │  ├─ Map<blockNum, RingBlock> ≤1000 (RAM)                │
+   │  ├─ Map<miner, MinerAggregate>  (cumulative since boot)  │
+   │  └─ enrichBlock: 1 eth_getBlockByNumber per push (smooth)│
+   │                                                          │
+   │  Hot endpoints (all 0 RPC at request time):              │
+   │  ├─ /api/blocks         ← ring                           │
+   │  ├─ /api/transactions   ← ring (full tx data)            │
+   │  ├─ /api/stats          ← ring tip + 1 eth_gasPrice      │
+   │  └─ /api/top-contracts  ← ring (5m), RPC fallback (15m+) │
+   │                                                          │
+   │  Background pollers (smooth-paced single calls):         │
+   │  ├─ reorg detector (4s, depth-15)                        │
+   │  ├─ TPS per-second collector (1s)                        │
+   │  ├─ validator-set tracker (60s)                          │
+   │  ├─ exec-stats writer → InfluxDB (30s, parses Loki logs) │
+   │  ├─ anomaly detectors (30s, Prometheus + 2 RPC)          │
+   │  └─ peer-geo refresh (30min)                             │
+   └──────────────────────────────────────────────────────────┘
+                  │           │           │
+                  ▼           ▼           ▼
+              Loki      Prometheus    InfluxDB
+              (logs)    (otelcol)   (persistence)
 ```
 
-Background pollers in `instrumentation.ts`:
-- reorg detector (10 s)
-- per-second TPS collector (1 s)
-- validator set tracker (60 s)
-- peer-geo refresh (30 min)
-- exec-stats writer to InfluxDB (30 s)
-- chain-stats poller (15 s)
+Hot-path diagnostic: `GET /api/ws-state` shows live ring/aggregator state.
+
+Long-range historical endpoints — Loki for `__exec_block` parsing,
+InfluxDB for chain-metric aggregates and persisted incidents.
 
 ### Stack
 
@@ -174,22 +192,43 @@ Middleware in `middleware.ts` adds in-app rate limiting (300 req / min / IP). Cl
 
 ## Design choices that matter
 
-- **Shared tip cache** (`lib/tipCache.ts`) — 500 ms TTL, deduplicates `eth_blockNumber` requests across all pollers. Critical for avoiding Monad RPC burst amplification in `triedb_env` channel.
-- **JSON-RPC batching** — `/api/blocks`, `/api/transactions`, `/api/stats` all batch instead of `Promise.all` of N individual calls. ~6× fewer TCP connections.
-- **Staking-precompile slot 8** — `totalStake`, NOT slot 2 (self-stake). Getting this wrong shows validators below the active-set floor.
-- **Unregistered signer handling** — ~15 % of block producers use a separate signing key, not their authAddress. We label them, don't hide them, and apply a 0.7× score penalty.
-- **InfluxDB dual-source** — `/api/exec-stats` ≤ 15 min → Loki (freshest), > 15 min → InfluxDB (persisted). Writer polls every 30 s.
+- **WebSocket push over polling.** Hot endpoints (`/api/blocks`, `/api/transactions`,
+  `/api/stats`) read from a RAM ring buffer filled by `eth_subscribe(newHeads)`,
+  not by per-request RPC fetches. Eliminates burst patterns that overflow
+  monad-rpc's `triedb_env` channel.
+- **WS aggregator for long-window stats.** Each push updates a `Map<miner, MinerAggregate>`
+  in RAM. After ~30 min of process runtime this gives a 4500+ block window for
+  stake-weighted participation calculations — variance ~1σ vs ~5σ on a 500-block
+  window.
+- **Staking-precompile slot 8** — `snapshotStake` per
+  [docs.monad.xyz/reference/staking/api](https://docs.monad.xyz/reference/staking/api).
+  This is the canonical value gating active-set membership at epoch boundary.
+  (Earlier code mis-named this `totalStake` — display value is correct, but the
+  field name confused readers.)
+- **Unregistered signer handling** — ~15 % of block producers use a separate signing
+  key, not their authAddress. We label them, don't hide them, and apply a 0.7× score
+  penalty. Their stake stays `null` (we cannot resolve miner→authAddress without
+  a registry of signing-key derivations).
+- **InfluxDB dual-source** — `/api/exec-stats` ≤ 15 min → Loki (freshest), > 15 min
+  → InfluxDB (persisted). Writer polls every 30 s.
+- **Anomaly detectors persisted to InfluxDB** — 5 edge-triggered detectors
+  (state_root_mismatch, state_sync_active, consensus_stress, vote_delay_high,
+  tip_lag) write to `monad_anomalies` measurement. Survives PM2 restarts so
+  the public IncidentTimeline doesn't blank out on deploys.
 
 ---
 
 ## Roadmap (short list)
 
-- [ ] Tip-lag vs reference RPC — "is my node lagging vs the network?"
+- [x] Tip-lag vs reference RPC — shipped as `tip_lag` anomaly detector
+- [x] Stake-weighted participation metric — shipped (short + long window)
+- [ ] Persist WS aggregator to InfluxDB so `participationLong` survives PM2 restart
 - [ ] Telegram / Discord bot for critical incidents
-- [ ] AS / ISP concentration detector → new incident type
+- [ ] AS / ISP concentration detector → new incident type (mainnet, via Decentra)
 - [ ] Light-theme toggle
 - [ ] Public API docs (OpenAPI)
 - [ ] Validator comparison tool (pick 2-3, side-by-side)
+- [ ] Per-validator delegator list — use `getDelegators` precompile (selector `0xa0843a26`) instead of block-scanning
 
 ---
 
