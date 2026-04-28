@@ -55,7 +55,10 @@ function Copyable({ address }: { address: string }) {
 }
 
 export default function TopContractsTable({ network }: { network: 'testnet' | 'mainnet' }) {
-  const [win, setWin] = useState<Window>('15m');
+  // Default 5m: fully covered by WS ring → 0 RPC fallback → instant.
+  // 15m+ may take 25-30s on cold cache when blocks fall outside the ring;
+  // background warmup poller in instrumentation.ts keeps cache warm afterwards.
+  const [win, setWin] = useState<Window>('5m');
   const [min, setMin] = useState<number>(5);
   const [data, setData] = useState<ApiResponse | null>(null);
   const [loading, setLoading] = useState(true);
