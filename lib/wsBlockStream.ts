@@ -25,10 +25,13 @@ import WebSocket from 'ws';
 // ── Config ────────────────────────────────────────────────────────────────
 const WS_URL = process.env.MONAD_WS_URL ?? 'ws://15.235.117.52:8081';
 const HTTP_RPC = process.env.MONAD_RPC_URL ?? 'http://15.235.117.52:8080';
+const INFLUX_URL = process.env.INFLUX_URL ?? 'https://localhost:8086';
+const INFLUX_DB = process.env.INFLUX_DB ?? 'monad';
 const RING_SIZE = 1000;        // ~6.5min @ 0.4s block time
 const RECONNECT_MIN_MS = 1_000;
 const RECONNECT_MAX_MS = 30_000;
 const RECONNECT_BACKOFF = 1.5;
+const AGGREGATE_WRITE_INTERVAL_MS = 5 * 60_000;  // every 5 min
 
 // ── Types ─────────────────────────────────────────────────────────────────
 export interface RingTx {
@@ -243,6 +246,121 @@ async function enrichBlock(num: number): Promise<void> {
   }
 }
 
+// ── InfluxDB persistence for the miner aggregate ──────────────────────────
+// Writes ALL miners as a single InfluxDB batch every 5 min. On startup we
+// hydrate from the latest write so participationLong stays meaningful across
+// PM2 restarts. No RPC overhead — InfluxDB is on the same host as dashboard.
+
+function escapeStr(v: string): string {
+  return v.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
+async function writeAggregateSnapshot(): Promise<void> {
+  if (S.minerAggregate.size === 0) return;
+  const ts = Date.now();
+  const lines: string[] = [];
+  for (const a of S.minerAggregate.values()) {
+    // miner as tag (low cardinality, ~200-300 unique addresses)
+    lines.push(
+      `monad_validator_aggregate,network=testnet,miner=${a.miner} ` +
+      `blocks=${a.blocks}i,txs=${a.txs}i,` +
+      `first_block=${a.firstSeenBlock}i,first_ts=${a.firstSeenTs}i,` +
+      `last_block=${a.lastSeenBlock}i,last_ts=${a.lastSeenTs}i ` +
+      `${ts}`
+    );
+  }
+  // Append our own start metadata so we can restore aggregateFirstBlock too.
+  lines.push(
+    `monad_validator_aggregate_meta,network=testnet ` +
+    `total_blocks=${S.totalBlocksObserved}i,total_txs=${S.totalTxsObserved}i,` +
+    `first_block=${S.aggregateFirstBlock ?? 0}i,started_at=${S.aggregateStartedAt}i ` +
+    `${ts}`
+  );
+  try {
+    await fetch(`${INFLUX_URL}/write?db=${INFLUX_DB}&precision=ms`, {
+      method: 'POST',
+      body: lines.join('\n'),
+      signal: AbortSignal.timeout(8_000),
+    });
+  } catch { /* non-critical */ }
+}
+
+async function hydrateAggregateFromInflux(): Promise<void> {
+  try {
+    // Per-miner latest snapshot.
+    const q = `SELECT LAST(blocks) as blocks, LAST(txs) as txs, `
+      + `LAST(first_block) as first_block, LAST(first_ts) as first_ts, `
+      + `LAST(last_block) as last_block, LAST(last_ts) as last_ts `
+      + `FROM monad_validator_aggregate WHERE network='testnet' GROUP BY miner`;
+    const res = await fetch(
+      `${INFLUX_URL}/query?db=${INFLUX_DB}&q=${encodeURIComponent(q)}&epoch=ms`,
+      { signal: AbortSignal.timeout(10_000) },
+    );
+    if (!res.ok) return;
+    const j = await res.json() as {
+      results: Array<{
+        series?: Array<{
+          tags?: Record<string, string>;
+          columns: string[];
+          values: unknown[][];
+        }>;
+      }>;
+    };
+    const series = j.results?.[0]?.series ?? [];
+    let restored = 0;
+    for (const s of series) {
+      const miner = s.tags?.miner;
+      if (!miner) continue;
+      const idx: Record<string, number> = {};
+      s.columns.forEach((c, i) => { idx[c] = i; });
+      const row = s.values?.[0];
+      if (!row) continue;
+      const blocks = Number(row[idx.blocks] ?? 0);
+      if (!Number.isFinite(blocks) || blocks === 0) continue;
+      S.minerAggregate.set(miner, {
+        miner,
+        blocks,
+        txs: Number(row[idx.txs] ?? 0),
+        firstSeenBlock: Number(row[idx.first_block] ?? 0),
+        firstSeenTs: Number(row[idx.first_ts] ?? 0),
+        lastSeenBlock: Number(row[idx.last_block] ?? 0),
+        lastSeenTs: Number(row[idx.last_ts] ?? 0),
+      });
+      restored++;
+    }
+    // Restore meta totals.
+    const metaQ = `SELECT LAST(total_blocks) as total_blocks, LAST(total_txs) as total_txs, `
+      + `LAST(first_block) as first_block, LAST(started_at) as started_at `
+      + `FROM monad_validator_aggregate_meta WHERE network='testnet'`;
+    const mr = await fetch(
+      `${INFLUX_URL}/query?db=${INFLUX_DB}&q=${encodeURIComponent(metaQ)}&epoch=ms`,
+      { signal: AbortSignal.timeout(6_000) },
+    );
+    if (mr.ok) {
+      const mj = await mr.json() as {
+        results: Array<{ series?: Array<{ columns: string[]; values: unknown[][] }> }>;
+      };
+      const ms = mj.results?.[0]?.series?.[0];
+      if (ms?.values?.[0]) {
+        const idx: Record<string, number> = {};
+        ms.columns.forEach((c, i) => { idx[c] = i; });
+        const row = ms.values[0];
+        S.totalBlocksObserved = Number(row[idx.total_blocks] ?? 0);
+        S.totalTxsObserved = Number(row[idx.total_txs] ?? 0);
+        const firstBlock = Number(row[idx.first_block] ?? 0);
+        if (firstBlock > 0) S.aggregateFirstBlock = firstBlock;
+        const startedAt = Number(row[idx.started_at] ?? 0);
+        if (startedAt > 0) S.aggregateStartedAt = startedAt;
+      }
+    }
+    // eslint-disable-next-line no-console
+    console.log(`[wsBlockStream] hydrated ${restored} miner aggregates from InfluxDB, total=${S.totalBlocksObserved} blocks`);
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.log(`[wsBlockStream] hydrate failed: ${e instanceof Error ? e.message : e}`);
+  }
+}
+
 // ── WebSocket lifecycle ───────────────────────────────────────────────────
 function scheduleReconnect() {
   if (S.reconnectTimer) return;
@@ -324,7 +442,21 @@ export function startWsBlockStream() {
   // eslint-disable-next-line no-console
   console.log(`[wsBlockStream] starting, ws=${WS_URL} ring=${RING_SIZE}`);
   S.startedAt = Date.now();
-  connect();
+  // Hydrate from InfluxDB FIRST so participationLong is meaningful
+  // immediately after PM2 restart instead of needing 30 min warmup.
+  // hydrate() returns quickly (one query) so we don't block the WS connect.
+  void hydrateAggregateFromInflux().finally(() => connect());
+
+  // Periodically persist the aggregate so future restarts can hydrate.
+  const g2 = globalThis as unknown as { __wsAggregateWriter__?: ReturnType<typeof setInterval> };
+  if (!g2.__wsAggregateWriter__) {
+    g2.__wsAggregateWriter__ = setInterval(() => { void writeAggregateSnapshot(); }, AGGREGATE_WRITE_INTERVAL_MS);
+  }
+}
+
+/** Force-write a snapshot now (e.g. before clean shutdown). */
+export function writeAggregateNow() {
+  return writeAggregateSnapshot();
 }
 
 /** Get last N blocks from the ring (newest first). */
