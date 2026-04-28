@@ -44,7 +44,6 @@ export async function register() {
   const {
     tickReorgDetector, tickValidatorSetTracker, refreshGeoDistribution,
   } = await import('./lib/networkHealth');
-  const { tickTpsCollector } = await import('./lib/tpsTimeline');
 
   // Reorg detector: 4s tick + depth-15 backfill. At 0.4s block time we see ~10
   // new blocks per tick — depth-15 covers all of them plus a 5-block safety
@@ -61,10 +60,9 @@ export async function register() {
   // Peer geo: refresh every 30min (ip-api.com has rate limits; mesh is stable)
   setTimeout(() => { refreshGeoDistribution(); setInterval(refreshGeoDistribution, 30 * 60_000); }, 20_000);
 
-  // TPS per-second collector: polls new blocks every 1s, aggregates tx counts
-  // into per-second buckets for the 5m/15m/1h TPS chart. Monad block time
-  // is ~0.4s so each tick fetches 2-3 new blocks via RPC batch.
-  setTimeout(() => { tickTpsCollector(); setInterval(tickTpsCollector, 1_000); }, 8_000);
+  // (tickTpsCollector removed 2026-04-28: TPS chart reads from /api/history
+  // (InfluxDB monad_chain) for all ranges. Removed 1Hz RPC polling — eliminates
+  // ~150 methods/min of background load on monad-rpc.)
 
   // Exec stats persistence: parses monad-execution __exec_block logs from Loki
   // every 30s and writes new blocks to InfluxDB `monad_exec`. Enables
@@ -114,5 +112,5 @@ export async function register() {
   setTimeout(() => { statsPoll(); setInterval(statsPoll, 15_000); }, 12_000);
 
   // eslint-disable-next-line no-console
-  console.log(`[instrumentation] background pollers started: /api/node (10s), reorg (4s, depth=15), tps-collector (1s), set-tracker (60s), geo (30m), exec-writer (30s), stats (15s), anomaly-detectors (30s), ws-block-stream (push)`);
+  console.log(`[instrumentation] background pollers started: /api/node (10s), reorg (4s, depth=15), set-tracker (60s), geo (30m), exec-writer (30s), stats (15s), anomaly-detectors (30s), ws-block-stream (push)`);
 }

@@ -139,39 +139,14 @@ export default function Home() {
 
   const fetchHistory = useCallback(async (r: RangeKey, mode: ChartMode) => {
     try {
-      // TPS source is split by range:
-      //   5m, 15m → /api/tps-timeline (per-second collector, in-RAM).
-      //             Per-second resolution is meaningful at this zoom; the
-      //             tickTpsCollector buffer fills within seconds of restart.
-      //   1h+    → /api/history (InfluxDB-backed monad_chain). Persists
-      //             across PM2 restarts. At this zoom the per-second detail
-      //             is wasted (visually the chart re-bins to ~1min buckets
-      //             anyway) so InfluxDB resolution is sufficient.
-      // Reads /api/history (HTTP to localhost InfluxDB) — zero monad-rpc load.
-      if (mode === 'tps' && (r === '5m' || r === '15m')) {
-        const res = await fetch(`/api/tps-timeline?range=${r}`, { cache: 'no-store' });
-        const json = await res.json() as {
-          points: Array<{ ts: number; tps: number; bucketSec: number }>;
-        };
-        if (json.points) {
-          const mapped: HistoryPoint[] = json.points.map(p => {
-            const d = new Date(p.ts * 1000);
-            const hh = String(d.getHours()).padStart(2, '0');
-            const mm = String(d.getMinutes()).padStart(2, '0');
-            const ss = String(d.getSeconds()).padStart(2, '0');
-            return {
-              ts: p.ts * 1000,
-              time: `${hh}:${mm}:${ss}`,
-              tps: p.tps,
-              gas: null,
-              util: null,
-            };
-          });
-          setHistoryPoints(mapped);
-        }
-        return;
-      }
-      // Long TPS ranges + Gas + Util all read from InfluxDB-backed history.
+      // All chart modes (TPS, Gas, Util) read from InfluxDB-backed /api/history.
+      // Single source of truth: monad_chain measurement, fed every 15s by the
+      // /api/stats poller. Persists across PM2 restarts — chart never blanks.
+      // Bucket resolution scales with range: 5m → 10s, 15m → 30s, 1h → 60s,
+      // 6h → 5min, 12h → 10min, 24h → 15min. Per-second detail (tps-timeline)
+      // was removed — visually 30+ buckets is sufficient and InfluxDB-only
+      // architecture eliminates the 1Hz tickTpsCollector poller (~150 RPC
+      // methods/min saved).
       const res = await fetch(`/api/history?range=${r}`);
       const json = await res.json() as { points: HistoryPoint[] };
       if (json.points) setHistoryPoints(json.points);
