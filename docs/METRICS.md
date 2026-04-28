@@ -331,6 +331,8 @@ Chronological feed of detected anomalies, persisted across server restarts.
 
 ### Incident types
 
+**Standard observers** (sample-based, on-chain or log-based):
+
 | Icon | Type | What it means |
 |------|------|---------------|
 | ↺ | **reorg** | Chain reorg detected. Severity scales with depth. |
@@ -340,6 +342,16 @@ Chronological feed of detected anomalies, persisted across server restarts.
 | ↯ | **retry_spike** | A block had retry_pct ≥90% and tx ≥5 — heavy contention burst. |
 | ⏸ | **block_stall** | Block-to-block gap >3s (warn) or >10s (critical). The chain paused. |
 | ! | **critical_log** | A critical log line emitted by a validator (panic, OOM, chunk-exhaustion, etc.). |
+
+**Anomaly detectors** (edge-triggered, Monad-specific, our validator only):
+
+| Icon | Type | What it means |
+|------|------|---------------|
+| ⊗ | **state_root_mismatch** | Local node received a block whose state-root doesn't match locally computed. Indicates execution-layer divergence (critical). |
+| ⟳ | **state_sync_active** | `monad_statesync_syncing` gauge transitioned 0→1 (critical — node not validating) or 1→0 (info — recovered). |
+| ⚡ | **consensus_stress** | Rolling 5-min ratio of rounds entered via TC (timeout certificate) vs QC (happy-path quorum) ≥ 20%. Healthy networks stay <5%. |
+| ⏱ | **vote_delay_high** | `monad_state_vote_delay_p99_ms` > 300ms sustained for 5 ticks (~2.5min). CPU saturation, mesh latency, or storage contention. |
+| ↧ | **tip_lag** | Local execution head is > 5 blocks behind reference RPC for 90s+. Possible state-sync, mesh issue, or execution lag. |
 
 ### Filters
 
