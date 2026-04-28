@@ -17,7 +17,6 @@ import Pagination from '@/components/Pagination';
 import TxSearch from '@/components/TxSearch';
 import HealthBadge from '@/components/HealthBadge';
 import EpochCard from '@/components/EpochCard';
-import NetworkHealthCard from '@/components/NetworkHealthCard';
 import ParallelismPanel from '@/components/ParallelismPanel';
 import TopContractsTable from '@/components/TopContractsTable';
 import { NETWORKS } from '@/lib/networks';
@@ -241,9 +240,6 @@ export default function Home() {
               <span className="badge-red">RPC Error — {error.slice(0, 60)}</span>
             )}
           </div>
-
-          {/* Network Health — decentralization / client / reorgs / geo */}
-          <NetworkHealthCard />
 
           {/* Health + Epoch row */}
           <div style={{
