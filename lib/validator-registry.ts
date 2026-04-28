@@ -13,8 +13,16 @@ interface GithubValidatorInfo {
 
 interface ChainValidatorData {
   authAddress: string;
+  /** Snapshot stake (MON) — gates active-set membership at epoch boundary. Slot 8. */
   stakeMon: number;
+  /** Active commission % (slot 4 ÷ 1e18 × 100). */
   commissionPct: number;
+  /** Live active stake (MON). May differ from snapshot mid-epoch. Slot 2. */
+  activeStakeMon?: number;
+  /** Consensus stake (MON) — current consensus weight. Slot 6. */
+  consensusStakeMon?: number;
+  /** Flags bitfield from precompile. Slot 1. */
+  flags?: number;
 }
 
 const STAKING_PRECOMPILE = '0x0000000000000000000000000000000000001000';
@@ -53,24 +61,41 @@ function decodeValidatorResult(raw: string): ChainValidatorData | null {
   for (let i = 2; i + 64 <= raw.length; i += 64) {
     slots.push(raw.slice(i, i + 64));
   }
-  // Slot layout on Monad testnet staking precompile (verified empirically):
+  // Tuple layout per docs.monad.xyz/reference/staking/api `getValidator(uint64)`:
   //   0 authAddress
-  //   2 selfStake (validator's own tokens)
-  //   4 commission (fixed-point 18 decimals)
-  //   5 unclaimedRewards (small, grows between claims)
-  //   8 totalStake (self + delegated) ← what gates active-set membership
-  // We used to return slot 2 as `stakeMon`, which hid delegated stake and
-  // made validators with delegators appear below the 10M active-set floor.
-  if (slots.length < 9) return null;
+  //   1 flags (bitfield)
+  //   2 stake               — live/active stake (changes with delegate/undelegate)
+  //   3 accRewardPerToken
+  //   4 commission           — fixed-point 18 decimals → percent
+  //   5 unclaimedRewards
+  //   6 consensusStake       — current consensus weight
+  //   7 consensusCommission
+  //   8 snapshotStake        — at last epoch snapshot, GATES active-set membership
+  //   9 snapshotCommission
+  //   10 secpPubkey (offset)
+  //   11 blsPubkey (offset)
+  //
+  // We display `snapshotStake` (slot 8) as the validator's stake because it's
+  // the value used to determine active-set membership at epoch boundary. The
+  // older comment called this "totalStake (self + delegated)" — that name was
+  // misleading; semantically the value is correct for our use case.
+  if (slots.length < 10) return null;
 
   const authAddress = '0x' + slots[0].slice(24);
-  const stakeWei = BigInt('0x' + slots[8]);            // total stake
+  const flags = Number(BigInt('0x' + slots[1]));
+  const activeStakeWei = BigInt('0x' + slots[2]);
   const commissionRaw = BigInt('0x' + slots[4]);
+  const consensusStakeWei = BigInt('0x' + slots[6]);
+  const snapshotStakeWei = BigInt('0x' + slots[8]);
 
-  const stakeMon = Number(stakeWei) / 1e18;
-  const commissionPct = Number(commissionRaw) / 1e18 * 100;
-
-  return { authAddress, stakeMon, commissionPct };
+  return {
+    authAddress,
+    stakeMon: Number(snapshotStakeWei) / 1e18,        // primary "stake" displayed
+    commissionPct: Number(commissionRaw) / 1e18 * 100,
+    activeStakeMon: Number(activeStakeWei) / 1e18,
+    consensusStakeMon: Number(consensusStakeWei) / 1e18,
+    flags,
+  };
 }
 
 async function fetchChainData(
@@ -78,7 +103,12 @@ async function fetchChainData(
   rpcUrl: string
 ): Promise<Map<number, ChainValidatorData>> {
   const result = new Map<number, ChainValidatorData>();
-  const batchSize = 100;
+  // batchSize 100→25 to stay under [[monad-rpc-pacing]] hard rule. eth_call to
+  // the staking precompile probably uses a different internal path than
+  // eth_getBlockByNumber (it doesn't go through MonadDb state lookups), but
+  // we keep batch=25 for consistency with the rule until empirically proven
+  // safe at higher sizes.
+  const batchSize = 25;
 
   for (let i = 0; i < validators.length; i += batchSize) {
     const batch = validators.slice(i, i + batchSize);
@@ -122,7 +152,10 @@ export function getRegistryEntries() {
 // metadata overlay — unknown IDs simply lack a moniker.
 async function enumerateOnChain(rpcUrl: string, maxProbeId = 500): Promise<Map<number, ChainValidatorData>> {
   const result = new Map<number, ChainValidatorData>();
-  const BATCH = 50;
+  // BATCH 50→25 to align with [[monad-rpc-pacing]] hard rule (cap at 25).
+  // 500/25 = 20 batches × 800ms pause = ~16s. Runs once per hour
+  // (REGISTRY_TTL_MS), no UX impact.
+  const BATCH = 25;
   for (let off = 1; off <= maxProbeId; off += BATCH) {
     const requests = [];
     for (let id = off; id < off + BATCH && id <= maxProbeId; id++) {
