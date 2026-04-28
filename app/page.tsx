@@ -139,22 +139,21 @@ export default function Home() {
 
   const fetchHistory = useCallback(async (r: RangeKey, mode: ChartMode) => {
     try {
-      // TPS mode uses the dedicated per-second collector with bucket
-      // aggregation: ~600 bars for long ranges (6h/12h/24h), physical max
-      // (300/900) for short ranges limited by 1s block-timestamp granularity.
-      // NOTE: long ranges show blank chart for the first hours after PM2
-      // restart because tickTpsCollector buffer is RAM-only. Live with it
-      // for now — routing to /api/history caused unrelated WARN regression
-      // on monad-rpc (see 2026-04-27 16:40 UTC revert). Persisting per-second
-      // buckets to InfluxDB is the long-term fix.
-      if (mode === 'tps') {
+      // TPS source is split by range:
+      //   5m, 15m → /api/tps-timeline (per-second collector, in-RAM).
+      //             Per-second resolution is meaningful at this zoom; the
+      //             tickTpsCollector buffer fills within seconds of restart.
+      //   1h+    → /api/history (InfluxDB-backed monad_chain). Persists
+      //             across PM2 restarts. At this zoom the per-second detail
+      //             is wasted (visually the chart re-bins to ~1min buckets
+      //             anyway) so InfluxDB resolution is sufficient.
+      // Reads /api/history (HTTP to localhost InfluxDB) — zero monad-rpc load.
+      if (mode === 'tps' && (r === '5m' || r === '15m')) {
         const res = await fetch(`/api/tps-timeline?range=${r}`, { cache: 'no-store' });
         const json = await res.json() as {
           points: Array<{ ts: number; tps: number; bucketSec: number }>;
         };
         if (json.points) {
-          const isShort = r === '5m' || r === '15m';
-          const isMedium = r === '1h';
           const mapped: HistoryPoint[] = json.points.map(p => {
             const d = new Date(p.ts * 1000);
             const hh = String(d.getHours()).padStart(2, '0');
@@ -162,7 +161,7 @@ export default function Home() {
             const ss = String(d.getSeconds()).padStart(2, '0');
             return {
               ts: p.ts * 1000,
-              time: isShort ? `${hh}:${mm}:${ss}` : isMedium ? `${hh}:${mm}` : `${hh}:${mm}`,
+              time: `${hh}:${mm}:${ss}`,
               tps: p.tps,
               gas: null,
               util: null,
@@ -172,6 +171,7 @@ export default function Home() {
         }
         return;
       }
+      // Long TPS ranges + Gas + Util all read from InfluxDB-backed history.
       const res = await fetch(`/api/history?range=${r}`);
       const json = await res.json() as { points: HistoryPoint[] };
       if (json.points) setHistoryPoints(json.points);
