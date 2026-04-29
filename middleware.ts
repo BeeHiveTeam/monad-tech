@@ -62,12 +62,22 @@ export function middleware(req: NextRequest) {
 
   // Rate limit all /api/* routes.
   if (pathname.startsWith('/api/')) {
-    const ip =
-      req.headers.get('cf-connecting-ip') ??
-      req.headers.get('x-forwarded-for')?.split(',')[0].trim() ??
-      'unknown';
+    const cfIp = req.headers.get('cf-connecting-ip');
+    const xfIp = req.headers.get('x-forwarded-for')?.split(',')[0].trim();
+    const ip = cfIp ?? xfIp ?? 'unknown';
 
-    if (isRateLimited(ip)) {
+    // Exempt internal loopback callers (background pollers, server-to-server
+    // calls between API routes). Without this, /api/network-health calling
+    // /api/validators from 127.0.0.1, plus all the background writers, share
+    // ONE counter and easily blow past 300 req/min — leading to 429 on
+    // legitimate internal traffic. Cloudflare populates cf-connecting-ip for
+    // real external requests, so this only opens up loopback.
+    const isInternal = !cfIp && (
+      ip === '127.0.0.1' || ip === '::1' || ip === 'unknown' ||
+      req.headers.get('host')?.startsWith('127.0.0.1')
+    );
+
+    if (!isInternal && isRateLimited(ip)) {
       return new NextResponse('Too Many Requests', {
         status: 429,
         headers: {
