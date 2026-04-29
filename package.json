@@ -2,6 +2,41 @@
   "name": "monad-stats",
   "version": "0.1.0",
   "private": true,
+  "description": "Real-time Monad testnet observability dashboard. WebSocket push + RAM ring buffer architecture. Surfaces parallel-execution metrics (retry_pct), block execution time breakdown, top contracts by retry rate, side-by-side validator comparison, and a unified incident timeline with 5 Monad-specific anomaly detectors. Operated by BeeHive.",
+  "keywords": [
+    "monad",
+    "monad-testnet",
+    "blockchain",
+    "validator",
+    "observability",
+    "dashboard",
+    "explorer",
+    "nakamoto-coefficient",
+    "parallel-execution",
+    "retry-rate",
+    "websocket",
+    "ethereum-compatible",
+    "evm",
+    "nextjs",
+    "typescript",
+    "tailwindcss",
+    "recharts",
+    "prometheus",
+    "grafana-loki",
+    "influxdb",
+    "delegation",
+    "staking"
+  ],
+  "homepage": "https://monad-tech.com",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/BeeHiveTeam/monad-tech.git"
+  },
+  "bugs": {
+    "url": "https://github.com/BeeHiveTeam/monad-tech/issues"
+  },
+  "author": "BeeHive <https://bee-hive.work>",
+  "license": "MIT",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
