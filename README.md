@@ -10,6 +10,28 @@ Real-time **Monad testnet observability dashboard** — with focus on the things
 
 ---
 
+## Screenshots
+
+### Network Status — home page with live KPIs and parallel-execution panel
+![Network Status](docs/screenshots/01-home.png)
+
+### Validators — sortable table, health scoring, side-by-side comparison
+![Validators](docs/screenshots/02-validators.png)
+
+### Validator Comparison — pick 2-5 to compare side-by-side
+![Validator Comparison](docs/screenshots/03-validators-compare.png)
+
+### Network Health — Nakamoto coefficient, top-10 stake, peer geography
+![Network Health](docs/screenshots/04-network-health.png)
+
+### Incident Timeline — 12 event types including 5 Monad-specific anomaly detectors
+![Incidents](docs/screenshots/05-incidents.png)
+
+### BeeHive — operator landing with live infra telemetry
+![BeeHive](docs/screenshots/06-beehive.png)
+
+---
+
 ## Why this exists
 
 Block explorers like MonadScan cover the basics (blocks, txs, gas). This dashboard adds the things operators and delegators actually need to see:
