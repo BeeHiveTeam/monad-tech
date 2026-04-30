@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getLatestBlocksBatched } from '@/lib/rpc';
 import { NETWORKS, NetworkId } from '@/lib/networks';
 import { getMoniker, getValidatorInfo } from '@/lib/validator-monikers';
-import { ensureRegistryLoaded, getRegistryEntries } from '@/lib/validator-registry';
+import { ensureRegistryLoaded, getRegistryEntries, getConsensusIds } from '@/lib/validator-registry';
 import { setBlockCache } from '@/lib/block-cache';
 import { getMinerAggregate, getAggregateState } from '@/lib/wsBlockStream';
 
@@ -43,7 +43,7 @@ async function computeValidators(network: NetworkId) {
   // batch=20 + pauseMs=200ms — restored 2026-04-27 16:40 UTC after measurement
   // showed batch=25 in combination with concurrent pollers caused conn pool to
   // double (3→6) and produced a 41-min continuous burst series. The known-good
-  // state at 15:23 UTC ("правка 3") had 0 WARN/30min with batch=20 and 3 conns.
+  // state at 15:23 UTC (revision 3) had 0 WARN/30min with batch=20 and 3 conns.
   // Lesson: changes interact in non-obvious ways under load — revert rather
   // than try-and-measure when in doubt.
   const blocks = await getLatestBlocksBatched(network, SAMPLE_BLOCKS, false, 20, 200);
@@ -129,17 +129,23 @@ async function computeValidators(network: NetworkId) {
   }
 
   // Compute active-set total stake for stake-weighted participation.
-  // Active set on Monad = validators with snapshotStake >= 10M MON. The leader
-  // election is stake-weighted, so a validator's expected blocks-produced is
+  // Active set on Monad = TOP-200 staked validators per epoch via
+  // syscallSnapshot, with minimums of 100k MON self + 10M MON total. We use
+  // getConsensusValidatorSet() as the canonical source. The earlier
+  // approximation `stakeMon >= 10M` was wrong by a few validators (didn't
+  // account for the top-200 cap, edge cases with snapshot stake just under
+  // 10M but seated by protocol). See [[validator-scoring-semantics]].
+  // Stake-weighted: a validator's expected blocks-produced is
   // `blocks.length × (its stake / total active stake)`, NOT `blocks.length / N`.
-  // Without this normalization, top-stake validators appear at 700%+ "participation"
-  // when they are simply earning their fair stake-weighted share.
-  const ACTIVE_STAKE_MIN = 10_000_000;
+  const ACTIVE_STAKE_MIN = 10_000_000;  // protocol minimum, fallback only
+  const consensusIds = getConsensusIds();
+  const useCanonicalSet = consensusIds.size > 0;
   let totalActiveStake = 0;
   for (const info of getRegistryEntries()) {
-    if ((info.stakeMon ?? 0) >= ACTIVE_STAKE_MIN) {
-      totalActiveStake += info.stakeMon ?? 0;
-    }
+    const inSet = useCanonicalSet
+      ? consensusIds.has(info.id)
+      : (info.stakeMon ?? 0) >= ACTIVE_STAKE_MIN;
+    if (inSet) totalActiveStake += info.stakeMon ?? 0;
   }
 
   // Cumulative aggregate from the WebSocket stream (since process start).
@@ -174,14 +180,43 @@ async function computeValidators(network: NetworkId) {
       );
       const activeRatio = windowSeconds > 0 ? activeWindowSec / windowSeconds : 1;
 
-      let health: 'active' | 'slow' | 'missing';
-      if (ageSeconds < expectedGap * 2) health = 'active';
-      else if (ageSeconds < expectedGap * 5) health = 'slow';
-      else health = 'missing';
-
       const info = getValidatorInfo(v.address);
       const stakeMon = info?.stakeMon ?? null;
-      const isActiveSet = (stakeMon ?? 0) >= ACTIVE_STAKE_MIN;
+      // Canonical active-set check: validator ID is in the result of
+      // getConsensusValidatorSet(). Falls back to the stake threshold only
+      // during cold-start when the precompile call hasn't completed yet.
+      const isActiveSet = useCanonicalSet
+        ? (info?.validatorId != null && consensusIds.has(info.validatorId))
+        : (stakeMon ?? 0) >= ACTIVE_STAKE_MIN;
+
+      // Stake-weighted personal expected gap. Leader election is stake-weighted
+      // within the active set, so a validator with 0.5% stake share produces
+      // ~0.5% of blocks. Their typical inter-block gap is therefore
+      // windowSeconds / (blocks.length × stakeShare), NOT the global mean.
+      // Using the global mean for thresholds caused low-stake validators to
+      // chronically appear `slow` even when producing exactly their fair share.
+      // For non-active-set validators or unknown stake, we keep the global
+      // gap — they shouldn't be in the active rotation anyway.
+      const stakeShareForGap = (isActiveSet && stakeMon != null && totalActiveStake > 0)
+        ? stakeMon / totalActiveStake
+        : 0;
+      const personalGap = stakeShareForGap > 0 && blocks.length > 0
+        ? windowSeconds / (blocks.length * stakeShareForGap)
+        : expectedGap;
+
+      let health: 'active' | 'slow' | 'missing';
+      if (v.blocksProduced === 0) {
+        // Zero blocks observed in the sample window. Without this branch the
+        // age-based classification falls back to `nowSec - oldestTs`, which
+        // is bounded by window-span (~3× expectedGap with sampleSize=500),
+        // never the 5× MISSING threshold — so every zero-block validator
+        // gets labeled 'slow', misleading delegators. Force 'missing' here
+        // regardless of active-set status; the score (healthScore=0,
+        // uptimeScore=0) is the honest signal.
+        health = 'missing';
+      } else if (ageSeconds < personalGap * 2) health = 'active';
+      else if (ageSeconds < personalGap * 5) health = 'slow';
+      else health = 'missing';
 
       // Two participation values:
       //   participationPct       — short-window (sample blocks). High variance
@@ -258,6 +293,8 @@ async function computeValidators(network: NetworkId) {
     network,
     sampleSize: blocks.length,
     activeValidators,
+    consensusSetSize: consensusIds.size,            // canonical (0 = falling back to stake threshold)
+    activeSetSource: useCanonicalSet ? 'consensus-precompile' : 'stake-threshold-fallback',
     producersInWindow,
     registeredCount,
     totalValidators: validators.length,             // legacy / backwards-compat

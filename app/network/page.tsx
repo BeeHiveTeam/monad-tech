@@ -109,8 +109,8 @@ export default function NetworkPage() {
             Network Health
           </h1>
           <div style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.6 }}>
-            Метрики децентрализации, версия клиента, реорги и география пиров — не публикуются в официальных инструментах.
-            Данные собираются с нашей ноды: validator registry, RPC, journald через Loki.
+            Decentralization metrics, client version, reorgs and peer geography — not published by official tooling.
+            Data is collected from our own node: validator registry, RPC, journald via Loki.
           </div>
         </div>
 
@@ -128,7 +128,7 @@ export default function NetworkPage() {
             {/* Decentralization / Nakamoto */}
             <Section
               title="DECENTRALIZATION · NAKAMOTO COEFFICIENT"
-              subtitle="Минимальное число валидаторов, чей суммарный stake превышает порог. BFT-safety требует >2/3, liveness-halt >1/3."
+              subtitle="Minimum number of validators whose combined stake exceeds the threshold. BFT-safety requires >2/3, liveness-halt >1/3."
             >
               <div style={{
                 display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
@@ -185,7 +185,7 @@ export default function NetworkPage() {
             {/* Reorgs */}
             <Section
               title="REORGS"
-              subtitle="Определяются сверкой хэшей на tip/tip-1/tip-2 каждые 2с. Окно трекинга начинается с перезапуска сервиса."
+              subtitle="Detected by comparing hashes at tip/tip-1/tip-2 every 2s. Tracking window starts at service restart."
             >
               <div style={{ display: 'flex', gap: 32, marginBottom: 14, flexWrap: 'wrap' }}>
                 <div>
@@ -222,7 +222,7 @@ export default function NetworkPage() {
             {/* Geo distribution */}
             <Section
               title="PEER GEO DISTRIBUTION"
-              subtitle={`Из keepalive-логов валидатора, ${d.geo.totalPeers} пиров за последние 15 минут, geoloc via ip-api.com. Refreshed ${fmtAge(d.geo.fetchedAt)}.`}
+              subtitle={`From validator keepalive logs, ${d.geo.totalPeers} peers in the last 15 minutes, geoloc via ip-api.com. Refreshed ${fmtAge(d.geo.fetchedAt)}.`}
             >
               <div className="grid-geo">
                 <div>

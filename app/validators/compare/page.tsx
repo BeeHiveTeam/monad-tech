@@ -99,17 +99,28 @@ function CompareInner() {
       .filter((v): v is Validator => v != null);
   }, [data, selected]);
 
-  // Search suggestions
+  // Search suggestions — when empty, show top validators by stake so users
+  // landing here directly (no addresses preloaded) immediately see clickable
+  // candidates instead of an empty box.
+  const [searchFocused, setSearchFocused] = useState(false);
   const suggestions = useMemo(() => {
-    if (!data || !searchInput.trim()) return [];
-    const q = searchInput.toLowerCase();
+    if (!data) return [];
+    const q = searchInput.trim().toLowerCase();
+    if (!q) {
+      // Empty input: show top by stake (only when search is focused)
+      if (!searchFocused) return [];
+      return [...data.validators]
+        .filter(v => !selected.includes(v.address) && v.stakeMon != null)
+        .sort((a, b) => (b.stakeMon ?? 0) - (a.stakeMon ?? 0))
+        .slice(0, 8);
+    }
     return data.validators
       .filter(v =>
         !selected.includes(v.address) &&
         ((v.moniker?.toLowerCase().includes(q)) || v.address.toLowerCase().includes(q))
       )
       .slice(0, 8);
-  }, [data, searchInput, selected]);
+  }, [data, searchInput, selected, searchFocused]);
 
   const updateUrl = (addrs: string[]) => {
     const params = new URLSearchParams();
@@ -209,7 +220,9 @@ function CompareInner() {
               type="text"
               value={searchInput}
               onChange={e => setSearchInput(e.target.value)}
-              placeholder="moniker or 0x address…"
+              onFocus={() => setSearchFocused(true)}
+              onBlur={() => setTimeout(() => setSearchFocused(false), 200)}
+              placeholder="click here, then type moniker or pick from list…"
               disabled={selected.length >= 5}
               style={{
                 flex: 1, minWidth: 200,
@@ -278,8 +291,13 @@ function CompareInner() {
             <p style={{ margin: '0 0 8px', fontSize: 14, color: 'var(--text)' }}>
               Add 2-5 validators to compare side-by-side.
             </p>
-            <p style={{ margin: 0 }}>
-              Search by moniker (e.g. <code>BeeHive</code>) or paste an address.
+            <p style={{ margin: '0 0 8px' }}>
+              Click the search field above and pick from the list, or type a moniker (e.g. <code>BeeHive</code>) / paste an address.
+            </p>
+            <p style={{ margin: 0, fontSize: 12 }}>
+              Tip: on the{' '}
+              <a href="/validators" style={{ color: 'var(--gold)' }}>Validators</a>{' '}
+              page you can tick checkboxes on multiple rows and click <strong>⇄ COMPARE</strong> to load them all here at once.
             </p>
           </div>
         ) : (
