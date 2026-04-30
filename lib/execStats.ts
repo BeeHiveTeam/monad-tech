@@ -11,9 +11,7 @@
  *   tpse/gpse = effective peak TPS / gas-per-sec observed inside this block
  */
 
-const LOKI_URL = process.env.LOKI_URL || 'http://127.0.0.1:3100';
-const INFLUX_URL = process.env.INFLUX_URL || 'https://localhost:8086';
-const INFLUX_DB = process.env.INFLUX_DB || 'monad';
+import { LOKI_URL, INFLUX_URL, INFLUX_DB } from './config';
 
 export interface ExecStat {
   block: number;
@@ -153,14 +151,39 @@ interface WriterState { lastBlock: number }
 const gW = globalThis as { __monadExecWriter__?: WriterState };
 if (!gW.__monadExecWriter__) gW.__monadExecWriter__ = { lastBlock: 0 };
 
-async function influxWriteRaw(lines: string): Promise<void> {
+async function influxWriteRaw(lines: string): Promise<boolean> {
   try {
-    await fetch(`${INFLUX_URL}/write?db=${INFLUX_DB}&precision=ms`, {
+    const res = await fetch(`${INFLUX_URL}/write?db=${INFLUX_DB}&precision=ms`, {
       method: 'POST',
       body: lines,
       signal: AbortSignal.timeout(4_000),
     });
-  } catch { /* non-critical: next tick retries */ }
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Returns the highest block already persisted in InfluxDB, or 0 if empty.
+ * Used at writer startup so we can backfill instead of skipping the gap.
+ */
+async function getMaxBlockFromInflux(network: string): Promise<number> {
+  try {
+    const q = `SELECT MAX(block) FROM monad_exec WHERE network='${network}'`;
+    const res = await fetch(
+      `${INFLUX_URL}/query?db=${INFLUX_DB}&q=${encodeURIComponent(q)}&epoch=ms`,
+      { signal: AbortSignal.timeout(4_000) },
+    );
+    if (!res.ok) return 0;
+    const j = await res.json() as {
+      results: Array<{ series?: Array<{ values: unknown[][] }> }>;
+    };
+    const v = j.results?.[0]?.series?.[0]?.values?.[0]?.[1];
+    return typeof v === 'number' ? v : 0;
+  } catch {
+    return 0;
+  }
 }
 
 function toLineProtocol(e: ExecStat, network: string): string {
@@ -176,6 +199,16 @@ function toLineProtocol(e: ExecStat, network: string): string {
 /**
  * Background poller: fetches last ~90s of exec stats from Loki and writes
  * only blocks we haven't written yet into InfluxDB. Called from instrumentation.
+ *
+ * On first run after a restart, lastBlock is read from InfluxDB MAX(block)
+ * so any blocks that landed in Loki during the restart window get backfilled
+ * (rather than silently dropped). Loki retention bounds backfill to ~7d, but
+ * the practical limit is the 90s `recent` window — anything older than that
+ * is unrecoverable but very unlikely (PM2 restart rarely takes >60s).
+ *
+ * Writes are confirmed: lastBlock advances only after a 2xx response from
+ * InfluxDB. Any failure (network, timeout, 5xx) keeps lastBlock unchanged so
+ * the next tick attempts the same batch again.
  */
 export async function tickExecWriter(network: string = 'testnet'): Promise<void> {
   try {
@@ -183,17 +216,24 @@ export async function tickExecWriter(network: string = 'testnet'): Promise<void>
     if (recent.length === 0) return;
 
     const state = gW.__monadExecWriter__!;
-    // On first run, skip backfill: start fresh from the newest block and
-    // only write going forward. Otherwise write everything newer.
     if (state.lastBlock === 0) {
-      state.lastBlock = recent[recent.length - 1].block - 1;
+      const maxFromInflux = await getMaxBlockFromInflux(network);
+      if (maxFromInflux > 0) {
+        state.lastBlock = maxFromInflux;
+      } else {
+        // InfluxDB empty (cold start) — start from the oldest block in the
+        // 90s window so we have continuous data going forward.
+        state.lastBlock = recent[0].block - 1;
+      }
     }
     const toWrite = recent.filter(e => e.block > state.lastBlock);
     if (toWrite.length === 0) return;
 
     const body = toWrite.map(e => toLineProtocol(e, network)).join('\n');
-    await influxWriteRaw(body);
-    state.lastBlock = toWrite[toWrite.length - 1].block;
+    const ok = await influxWriteRaw(body);
+    if (ok) {
+      state.lastBlock = toWrite[toWrite.length - 1].block;
+    }
   } catch { /* swallow */ }
 }
 

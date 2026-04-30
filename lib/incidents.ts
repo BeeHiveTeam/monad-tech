@@ -17,6 +17,7 @@
  */
 
 import { fetchExecStats, fetchExecStatsFromInflux, ExecStat } from './execStats';
+import { getMoniker } from './validator-monikers';
 import {
   getReorgState, getSetChanges,
   fetchReorgsFromInflux, fetchSetChangesFromInflux,
@@ -32,7 +33,7 @@ export type IncidentType =
   | 'retry_spike' | 'block_stall'
   | 'critical_log'
   | 'state_root_mismatch' | 'state_sync_active'
-  | 'consensus_stress' | 'vote_delay_high' | 'tip_lag';
+  | 'consensus_stress' | 'vote_delay_high' | 'tip_lag' | 'exec_lag';
 
 export interface Incident {
   id: string;              // stable-ish key for React list
@@ -76,7 +77,8 @@ export async function collectValidatorSetChanges(sinceMs: number): Promise<Incid
   return events
     .filter(e => e.ts >= sinceMs)
     .map(e => {
-      const who = e.moniker ?? `${e.address.slice(0, 10)}…`;
+      const moniker = e.moniker ?? getMoniker(e.address);
+      const who = moniker ? `${moniker} · ${e.address}` : e.address;
       if (e.type === 'removed') {
         return {
           id: `vsc-rem-${e.address}-${e.ts}`,
@@ -84,7 +86,7 @@ export async function collectValidatorSetChanges(sinceMs: number): Promise<Incid
           severity: 'critical' as Severity,
           type: 'validator_removed' as IncidentType,
           title: `Validator removed: ${who}`,
-          detail: `No longer in active set. Address ${e.address}.`,
+          detail: `No longer in active set.`,
           address: e.address,
           meta: e as unknown as Record<string, unknown>,
         };
@@ -155,8 +157,15 @@ export async function detectRetrySpikes(rangeSeconds: number): Promise<Incident[
 }
 
 /**
- * Block stall = gap between consecutive blocks > 3s. Warn at 3s, critical at 10s.
- * Monad targets ~0.4s block time so 3s = ~7x slower than normal.
+ * Block stall = gap between consecutive blocks > 3s with the next block being
+ * the immediate successor (block+1). Warn at 3s, critical at 10s.
+ *
+ * Why blockGap must be 1: a real stall (consensus or execution) means no
+ * blocks are produced/applied — when activity resumes, the very next block
+ * number is one greater than the last. A `blockGap > 1` means we're missing
+ * intermediate entries from our own InfluxDB pipeline (writer dropped batches
+ * after PM2 restart, etc.) — that's a data-completeness bug, not a chain
+ * stall. See [[exec-stall-recurring-2026-04-30]].
  */
 export async function detectBlockStalls(rangeSeconds: number): Promise<Incident[]> {
   const execs = await getExecStats(rangeSeconds);
@@ -164,6 +173,8 @@ export async function detectBlockStalls(rangeSeconds: number): Promise<Incident[
   for (let i = 1; i < execs.length; i++) {
     const gapMs = execs[i].ts - execs[i - 1].ts;
     if (gapMs < 3000) continue;
+    const blockGap = execs[i].block - execs[i - 1].block;
+    if (blockGap !== 1) continue; // pipeline gap, not a chain stall
     const severity: Severity = gapMs >= 10000 ? 'critical' : 'warn';
     out.push({
       id: `stl-${execs[i].block}`,
@@ -173,7 +184,7 @@ export async function detectBlockStalls(rangeSeconds: number): Promise<Incident[
       title: `Block stall: ${(gapMs / 1000).toFixed(1)}s gap`,
       detail: `Block ${execs[i].block} arrived ${(gapMs / 1000).toFixed(1)}s after block ${execs[i - 1].block}. Normal = ~0.4s.`,
       blockNumber: execs[i].block,
-      meta: { gapMs, prevBlock: execs[i - 1].block },
+      meta: { gapMs, prevBlock: execs[i - 1].block, blockGap },
     });
   }
   return out;
@@ -310,7 +321,7 @@ export async function buildIncidentFeed(
     reorg: 0, validator_removed: 0, validator_added: 0, stake_decrease: 0,
     retry_spike: 0, block_stall: 0, critical_log: 0,
     state_root_mismatch: 0, state_sync_active: 0,
-    consensus_stress: 0, vote_delay_high: 0, tip_lag: 0,
+    consensus_stress: 0, vote_delay_high: 0, tip_lag: 0, exec_lag: 0,
   };
   for (const i of incidents) {
     counts[i.severity]++;

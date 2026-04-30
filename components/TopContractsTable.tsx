@@ -1,5 +1,6 @@
 'use client';
 import { useEffect, useState } from 'react';
+import Link from 'next/link';
 
 interface ContractRow {
   address: string;
@@ -22,7 +23,11 @@ interface ApiResponse {
 type Window = '5m' | '15m' | '1h';
 
 const WINDOW_LABELS: Window[] = ['5m', '15m', '1h'];
-const MIN_OPTIONS = [3, 5, 10, 25];
+// Per-window default `min` — must mirror lib/topContracts WINDOW_DEFAULT_MIN
+// so the API returns the InfluxDB-cached snapshot path (instant) for the
+// default UI selection. Custom min via the picker falls through to live compute.
+const WINDOW_DEFAULT_MIN: Record<Window, number> = { '5m': 20, '15m': 50, '1h': 100 };
+const MIN_OPTIONS = [10, 20, 50, 100];
 
 function shareColor(pct: number): string {
   if (pct >= 75) return '#E05252';
@@ -59,7 +64,10 @@ export default function TopContractsTable({ network }: { network: 'testnet' | 'm
   // 15m+ may take 25-30s on cold cache when blocks fall outside the ring;
   // background warmup poller in instrumentation.ts keeps cache warm afterwards.
   const [win, setWin] = useState<Window>('5m');
-  const [min, setMin] = useState<number>(5);
+  const [min, setMin] = useState<number>(WINDOW_DEFAULT_MIN['5m']);
+
+  // Reset min to the new window's default whenever the window changes.
+  useEffect(() => { setMin(WINDOW_DEFAULT_MIN[win]); }, [win]);
   const [data, setData] = useState<ApiResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
@@ -84,9 +92,9 @@ export default function TopContractsTable({ network }: { network: 'testnet' | 'm
     return () => { cancelled = true; clearInterval(t); };
   }, [win, min, network]);
 
-  const explorerBase = network === 'testnet'
-    ? 'https://testnet.monadexplorer.com/address'
-    : 'https://monadexplorer.com/address';
+  // Internal /address page — see app/address/[address]/page.tsx. Network
+  // parameter passes through so the address API knows which RPC to query.
+  const internalAddrBase = `/address`;
 
   return (
     <div className="card" style={{ padding: '20px 24px', marginBottom: 16 }}>
@@ -174,7 +182,12 @@ export default function TopContractsTable({ network }: { network: 'testnet' | 'm
                 <th style={{ ...thStyle, textAlign: 'right' }}>BLOCKS</th>
                 <th style={{ ...thStyle, textAlign: 'right' }}>RETRIED</th>
                 <th style={{ ...thStyle, textAlign: 'left', minWidth: 140 }}>RETRIED RATIO</th>
-                <th style={{ ...thStyle, textAlign: 'right' }}>AVG rtp</th>
+                <th
+                  style={{ ...thStyle, textAlign: 'right', cursor: 'help' }}
+                  title="Co-occurrence retry-percentage. Average of block-level rtp across blocks containing this contract. Block-level rtp is shared by ALL contracts in the same block, so high values indicate correlation with retried blocks — not proof this contract caused them."
+                >
+                  CO-OCC RTP
+                </th>
                 <th style={{ ...thStyle, textAlign: 'right' }}>TX</th>
                 <th style={thStyle}></th>
               </tr>
@@ -213,18 +226,16 @@ export default function TopContractsTable({ network }: { network: 'testnet' | 'm
                   </td>
                   <td style={{ ...tdStyle, textAlign: 'right', color: 'var(--text-muted)' }}>{r.tx}</td>
                   <td style={tdStyle}>
-                    <a
-                      href={`${explorerBase}/${r.address}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
+                    <Link
+                      href={`${internalAddrBase}/${r.address}`}
                       style={{
                         fontSize: 10, color: 'var(--gold-dim)', textDecoration: 'none',
                         fontFamily: 'DM Mono, monospace',
                       }}
-                      title="view on explorer"
+                      title="view contract details"
                     >
-                      ↗
-                    </a>
+                      →
+                    </Link>
                   </td>
                 </tr>
               ))}
@@ -234,8 +245,8 @@ export default function TopContractsTable({ network }: { network: 'testnet' | 'm
       </div>
 
       <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 10, lineHeight: 1.5 }}>
-        <strong style={{ color: 'var(--text)' }}>Retried ratio</strong> = % of blocks containing this contract that had at least one re-executed tx.
-        Since <code>rtp</code> is per-block (not per-tx), high ratio is correlation, not proof of causation — but hot contracts concentrate at the top.
+        <strong style={{ color: 'var(--text)' }}>Retried ratio</strong> = % of blocks containing this contract that had at least one re-executed tx.{' '}
+        <strong style={{ color: 'var(--text)' }}>Co-occ rtp</strong> = average block-level rtp across those blocks — shared by every contract in the same block, so it&apos;s a co-occurrence signal, not per-contract retry rate. Hot contracts concentrate at the top by correlation. System addresses (precompiles, e.g. <code>0x…1000</code>) are filtered out.
       </div>
     </div>
   );

@@ -4,24 +4,23 @@
  * measurement `monad_anomalies` so they survive PM2 restarts and can be
  * read by the unified incident feed.
  *
- * Five detector types:
+ * Six detector types:
  *   1. state_root_mismatch — counter delta on cs_rx_bad_state_root (critical)
  *   2. state_sync_active   — gauge 0↔1 transitions on monad_statesync_syncing
  *   3. consensus_stress    — TC/(QC+TC) ratio in 5min window > 20%
  *   4. vote_delay_high     — vote_delay p99_ms > 300ms sustained for 5 ticks
  *   5. tip_lag             — local exec head behind reference RPC by >5 blocks
+ *   6. exec_lag            — counter delta on rx_execution_lagging (consensus
+ *                            saw exec lag) — the platform's own truth about
+ *                            execution falling behind, independent of our
+ *                            log/InfluxDB pipeline
  *
  * All detectors run on the same 30s tick. Edge-triggered (fire on entering
  * alerting state) to avoid spam — recovery is implied by absence of new events.
  */
 
 import { parsePrometheus, findOne } from './prom-parser';
-
-const METRICS_URL = process.env.NODE_METRICS_URL || 'http://15.235.117.52:8889/metrics';
-const INFLUX_URL = process.env.INFLUX_URL || 'https://localhost:8086';
-const INFLUX_DB = process.env.INFLUX_DB || 'monad';
-const REFERENCE_RPC = process.env.MONAD_REFERENCE_RPC || 'https://testnet-rpc.monad.xyz';
-const LOCAL_RPC = process.env.MONAD_RPC_URL || 'http://15.235.117.52:8080';
+import { NODE_METRICS_URL as METRICS_URL, INFLUX_URL, INFLUX_DB, MONAD_REFERENCE_RPC as REFERENCE_RPC, MONAD_RPC_URL as LOCAL_RPC } from './config';
 
 // Thresholds — tuned conservatively to avoid noise. Adjust after live calibration.
 const CONSENSUS_STRESS_RATIO = 0.20;        // 20% TC ratio over 5min = stressed
@@ -37,7 +36,8 @@ export type AnomalyType =
   | 'state_sync_active'
   | 'consensus_stress'
   | 'vote_delay_high'
-  | 'tip_lag';
+  | 'tip_lag'
+  | 'exec_lag';
 
 export type AnomalySeverity = 'info' | 'warn' | 'critical';
 
@@ -66,6 +66,8 @@ interface DetectorState {
   // tip lag streak
   tipLagStreak: number;
   tipLagActive: boolean;
+  // exec lag counter (rx_execution_lagging)
+  prevExecLag: number | null;
 }
 
 const g = globalThis as unknown as { __monadAnomalyState__?: DetectorState };
@@ -81,6 +83,7 @@ if (!g.__monadAnomalyState__) {
     voteDelayActive: false,
     tipLagStreak: 0,
     tipLagActive: false,
+    prevExecLag: null,
   };
 }
 const S = g.__monadAnomalyState__!;
@@ -302,6 +305,27 @@ export async function tickAnomalyDetectors(): Promise<void> {
       S.tipLagStreak = 0;
       S.tipLagActive = false;
     }
+  }
+
+  // 6. exec_lag (counter delta on rx_execution_lagging)
+  // monad-bft increments this whenever consensus observes execution falling
+  // behind. Cumulative counter; we fire on any non-zero delta within a tick.
+  // This replaces the unreliable `block_stall` log-gap detector for real lag.
+  const execLag = findOne(samples, 'monad_state_consensus_events_rx_execution_lagging')?.value ?? null;
+  if (execLag !== null) {
+    if (S.prevExecLag !== null && execLag > S.prevExecLag) {
+      const delta = execLag - S.prevExecLag;
+      events.push({
+        ts: now,
+        type: 'exec_lag',
+        severity: 'warn',
+        title: `Execution lag · ${delta} new event(s)`,
+        detail: `monad-bft observed execution falling behind consensus ${delta} time(s) in the last 30s. `
+          + `Total lifetime: ${execLag}. Source: rx_execution_lagging counter on the validator.`,
+        meta: { delta, total: execLag },
+      });
+    }
+    S.prevExecLag = execLag;
   }
 
   // Persist all detected events

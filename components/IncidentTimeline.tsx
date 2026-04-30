@@ -1,5 +1,6 @@
 'use client';
 import { useEffect, useState } from 'react';
+import Link from 'next/link';
 
 type Severity = 'info' | 'warn' | 'critical';
 type IncidentType =
@@ -8,7 +9,7 @@ type IncidentType =
   | 'retry_spike' | 'block_stall'
   | 'critical_log'
   | 'state_root_mismatch' | 'state_sync_active'
-  | 'consensus_stress' | 'vote_delay_high' | 'tip_lag';
+  | 'consensus_stress' | 'vote_delay_high' | 'tip_lag' | 'exec_lag';
 
 interface Incident {
   id: string;
@@ -62,6 +63,7 @@ const TYPE_ICON: Record<IncidentType, string> = {
   consensus_stress: '⚡',
   vote_delay_high: '⏱',
   tip_lag: '↧',
+  exec_lag: '⌫',
 };
 
 const TYPE_LABEL: Record<IncidentType, string> = {
@@ -77,6 +79,7 @@ const TYPE_LABEL: Record<IncidentType, string> = {
   consensus_stress: 'Consensus stress',
   vote_delay_high: 'Vote delay high',
   tip_lag: 'Tip lag',
+  exec_lag: 'Execution lag',
 };
 
 function fmtTime(ms: number): string {
@@ -283,8 +286,23 @@ export default function IncidentTimeline() {
                           flexWrap: 'wrap', fontFamily: 'DM Mono, monospace',
                           fontSize: 10,
                         }}>
-                          {i.blockNumber && <span>block: {i.blockNumber}</span>}
-                          {i.address && <span>addr: {i.address.slice(0, 16)}…</span>}
+                          {i.blockNumber && (
+                            <Link
+                              href={`/block/${i.blockNumber}`}
+                              style={{ color: 'var(--gold-dim)', textDecoration: 'none' }}
+                            >
+                              block: {i.blockNumber}
+                            </Link>
+                          )}
+                          {i.address && (
+                            <Link
+                              href={`/address/${i.address}`}
+                              style={{ color: 'var(--gold-dim)', textDecoration: 'none' }}
+                              title={i.address}
+                            >
+                              addr: {i.address.slice(0, 8)}…{i.address.slice(-4)}
+                            </Link>
+                          )}
                           {i.service && <span>service: {i.service}</span>}
                         </div>
                       )}

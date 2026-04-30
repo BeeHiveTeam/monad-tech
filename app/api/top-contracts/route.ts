@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getTopContractsCached, fetchTopContractsFromInflux } from '@/lib/topContracts';
+import { getTopContractsCached, fetchTopContractsFromInflux, WINDOW_DEFAULT_MIN } from '@/lib/topContracts';
 import { NETWORKS, NetworkId } from '@/lib/networks';
 
 export const dynamic = 'force-dynamic';
@@ -36,14 +36,15 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  const min = Math.max(1, Math.min(100, parseInt(req.nextUrl.searchParams.get('min') ?? '5', 10)));
+  const defaultMin = WINDOW_DEFAULT_MIN[windowKey] ?? 20;
+  const min = Math.max(1, Math.min(500, parseInt(req.nextUrl.searchParams.get('min') ?? String(defaultMin), 10)));
   const limit = Math.max(1, Math.min(100, parseInt(req.nextUrl.searchParams.get('limit') ?? '20', 10)));
 
   try {
     // Primary path: read latest snapshot from InfluxDB. <100ms typically.
-    // Only valid for the default min=5 limit=20 (the params the writer uses);
-    // custom min/limit fall through to live compute.
-    if (min === 5 && limit === 20) {
+    // Only valid for the per-window default min + limit=20 (the params the
+    // writer uses); custom min/limit fall through to live compute.
+    if (min === defaultMin && limit === 20) {
       const snap = await fetchTopContractsFromInflux(network, windowKey);
       if (snap && snap.ageMs < SNAPSHOT_MAX_AGE_MS) {
         return NextResponse.json({ ...snap.result, source: 'influx', snapshotAgeMs: snap.ageMs }, {
