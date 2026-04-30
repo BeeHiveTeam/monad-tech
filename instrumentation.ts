@@ -87,16 +87,6 @@ export async function register() {
   const { startWsBlockStream } = await import('./lib/wsBlockStream');
   setTimeout(() => { startWsBlockStream(); }, 8_000);
 
-  // Staking ops scanner — DISABLED 2026-04-24.
-  // With MAX_PER_TICK=100 and full=true block fetches every 15s, each tick
-  // fired one JSON-RPC batch with 30-100 methods, which the triedb_env
-  // channel can't drain — caused scraper rate to jump from ~4 req/sec to
-  // ~78 req/sec with WARN ×5.3. Re-enable only after redesign: either use
-  // eth_getLogs as a pre-filter (so we fetch only blocks with staking
-  // activity), or scan much slower (1-2 blocks/sec max, no batch catch-up).
-  // const { tickStakingScanner } = await import('./lib/stakingOps');
-  // setTimeout(() => { tickStakingScanner(); setInterval(tickStakingScanner, 15_000); }, 18_000);
-
   // Chain-stats poller: hits /api/stats every 15s so InfluxDB `monad_chain`
   // (tps, gas_gwei, block_util_pct) stays continuously populated regardless
   // of live viewer activity. Without this, /api/history has null gaps for
