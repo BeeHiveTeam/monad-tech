@@ -18,10 +18,12 @@ interface ValidatorDetail {
     moniker?: string;
     website?: string;
     description?: string;
-    authAddress?: string;
-    publicKey?: string;
-    country?: string;
-    createdAt?: string;
+    logo?: string;
+    x?: string;
+    validatorId?: number;
+    secp?: string;
+    stakeMon?: number;
+    commissionPct?: number;
   } | null;
   stats: {
     health: Health;
@@ -35,7 +37,7 @@ interface ValidatorDetail {
   };
   context: {
     sampleSize: number;
-    numValidators: number;
+    producersInWindow: number;
     expectedGapSeconds: number;
     windowSeconds: number;
   };
@@ -53,6 +55,24 @@ const HEALTH_STYLE: Record<Health, { bg: string; fg: string; label: string }> = 
 
 function scoreColor(s: number) {
   return s >= 75 ? '#4CAF6E' : s >= 45 ? '#C9A84C' : '#E05252';
+}
+
+function formatStake(mon: number | undefined): string {
+  if (mon == null) return '—';
+  if (mon >= 1_000_000) return `${(mon / 1_000_000).toFixed(1)}M MON`;
+  if (mon >= 1_000) return `${(mon / 1_000).toFixed(0)}K MON`;
+  return `${mon.toFixed(0)} MON`;
+}
+
+function formatCommission(pct: number | undefined): string {
+  if (pct == null) return '—';
+  return Number.isInteger(pct) ? `${pct}%` : `${pct.toFixed(2)}%`;
+}
+
+function xHandle(url: string | undefined): string | null {
+  if (!url) return null;
+  const m = url.match(/(?:x\.com|twitter\.com)\/([^/?#]+)/i);
+  return m ? `@${m[1]}` : url;
 }
 
 function Field({ label, value, mono, link }: {
@@ -170,9 +190,10 @@ export default function ValidatorDetailPage() {
                       <a
                         href={`${explorer}/address/${data.address}`}
                         target="_blank" rel="noopener noreferrer"
-                        style={{ fontSize: 11, color: 'var(--gold-dim)', textDecoration: 'none' }}
+                        style={{ fontSize: 11, color: 'var(--gold-dim)', textDecoration: 'none', opacity: 0.7 }}
+                        title="External MonadScan view (third-party)"
                       >
-                        View on MonadScan ↗
+                        Also on MonadScan ↗
                       </a>
                     </div>
                   </div>
@@ -182,13 +203,15 @@ export default function ValidatorDetailPage() {
               {/* Stats row */}
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 10, marginBottom: 16 }}>
                 {[
+                  { label: 'Stake', value: formatStake(data.info?.stakeMon) },
+                  { label: 'Commission', value: formatCommission(data.info?.commissionPct) },
                   { label: 'Blocks produced', value: data.stats.blocksProduced.toLocaleString('en-US') },
                   { label: 'Block share', value: `${data.stats.sharePct.toFixed(2)}%` },
                   { label: 'Participation', value: `${Math.min(data.stats.participationPct, 100).toFixed(0)}%`,
                     sub: data.stats.participationPct > 100 ? `raw ${data.stats.participationPct.toFixed(0)}% (high stake)` : undefined },
                   { label: 'Total txs', value: data.stats.totalTxs.toLocaleString('en-US') },
                   { label: 'Sample size', value: `${data.context.sampleSize.toLocaleString()} blocks` },
-                  { label: 'Validators in set', value: data.context.numValidators.toString() },
+                  { label: 'Producers in window', value: data.context.producersInWindow.toString() },
                 ].map(s => (
                   <div key={s.label} className="card" style={{ padding: '14px 18px' }}>
                     <div style={{ fontSize: 10, color: 'var(--text-muted)', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 4 }}>{s.label}</div>
@@ -206,20 +229,22 @@ export default function ValidatorDetailPage() {
                   </div>
                   <Field label="Moniker" value={data.info?.moniker} />
                   <Field label="Status" value={hs.label} />
-                  <Field label="Auth Address" value={data.info?.authAddress} mono />
-                  <Field label="Public Key" value={data.info?.publicKey} mono />
-                  <Field label="Exec Address" value={data.address} mono
-                    link={`${explorer}/address/${data.address}`} />
+                  <Field label="Validator ID" value={data.info?.validatorId?.toString()} />
+                  <Field label="Auth Address" value={data.address} mono />
+                  <Field label="Public Key (secp)" value={data.info?.secp} mono />
                   <Field label="Website" value={data.info?.website}
                     link={data.info?.website} />
-                  <Field label="Country" value={data.info?.country} />
-                  <Field label="Created At" value={data.info?.createdAt} />
+                  <Field label="X / Twitter" value={xHandle(data.info?.x)}
+                    link={data.info?.x} />
                   <Field label="Description" value={data.info?.description} />
 
                   <div style={{ marginTop: 14, fontSize: 11, color: 'rgba(138,136,112,0.5)', lineHeight: 1.5 }}>
-                    Auth Address, Public Key, Website и Description добавляются вручную в{' '}
-                    <code style={{ color: 'var(--gold-dim)' }}>lib/validator-monikers.ts</code>.
-                    Публичный RPC Monad не раскрывает данные регистрации валидаторов.
+                    Stake and Commission are read from the staking precompile (slot 4 / 8). Moniker,
+                    Website, X and Description come from the{' '}
+                    <a href="https://github.com/monad-developers/validator-info" target="_blank" rel="noopener noreferrer"
+                      style={{ color: 'var(--gold-dim)' }}>
+                      monad-developers/validator-info
+                    </a>{' '}registry and refresh every hour.
                   </div>
                 </div>
 
@@ -246,13 +271,12 @@ export default function ValidatorDetailPage() {
                           {data.recentBlocks.map(b => (
                             <tr key={b.number}>
                               <td style={{ fontFamily: 'DM Mono, monospace', fontSize: 12 }}>
-                                <a
-                                  href={`${explorer}/block/${b.number}`}
-                                  target="_blank" rel="noopener noreferrer"
+                                <Link
+                                  href={`/block/${b.number}`}
                                   style={{ color: 'var(--gold-dim)', textDecoration: 'none' }}
                                 >
                                   #{b.number.toLocaleString('en-US')}
-                                </a>
+                                </Link>
                               </td>
                               <td style={{ textAlign: 'right', fontFamily: 'DM Mono, monospace', fontSize: 12, color: 'var(--text-muted)' }}>
                                 {b.txCount}

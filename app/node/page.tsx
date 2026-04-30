@@ -519,7 +519,7 @@ export default function NodePage() {
                 ))}
               </div>
               <div style={{ marginTop: 10, fontSize: 10, color: 'rgba(138,136,112,0.5)', lineHeight: 1.5 }}>
-                Status определяется по наличию и свежести метрик соответствующего префикса (fresh &lt; 30s). Настоящий systemd-state (active/activating/failed) требует агента на валидаторе — пока недоступно.
+                Status is inferred from the presence and freshness of metrics with the matching prefix (fresh &lt; 30s). True systemd state (active/activating/failed) requires an agent on the validator — not yet available.
               </div>
             </div>
           )}
@@ -568,7 +568,7 @@ export default function NodePage() {
                 if (range === 'custom') {
                   return (
                     <div style={{ padding: '20px 0', fontSize: 12, color: 'var(--text-muted)', textAlign: 'center' }}>
-                      Счётчики событий доступны только для стандартных диапазонов (5m–24h). Для пользовательского окна используй панель логов ниже.
+                      Event counters are only available for standard ranges (5m–24h). Use the log panel below for custom windows.
                     </div>
                   );
                 }
@@ -576,7 +576,7 @@ export default function NodePage() {
                 if (!w) {
                   return (
                     <div style={{ padding: '20px 0', fontSize: 12, color: 'var(--text-muted)', textAlign: 'center' }}>
-                      Недостаточно истории для окна «{range}». Данные собираются — попробуйте меньший диапазон.
+                      Not enough history for the &quot;{range}&quot; window. Data is being collected — try a smaller range.
                     </div>
                   );
                 }
@@ -711,7 +711,7 @@ export default function NodePage() {
                   ))}
                 </div>
                 <div style={{ marginTop: 12, fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.5 }}>
-                  trieDB хранится внутри этой файловой системы. Для отдельной метрики размера БД нужна агентная надстройка на валидаторе — см. заметку ниже.
+                  trieDB is stored inside this filesystem. A dedicated DB-size metric would require a host agent on the validator — see note below.
                 </div>
               </div>
             )}
@@ -729,10 +729,10 @@ export default function NodePage() {
           )}
 
           <div style={{ fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.6, marginBottom: 32 }}>
-            Данные с otelcol Prometheus-endpoint&apos;а на валидаторе BeeHive ({data?.source || 'no source'}).
-            Обновление каждые {POLL_INTERVAL / 1000} секунд. История CPU и памяти хранится в InfluxDB (БД «monad»).
-            Счётчики «Node events» считают ошибки за выбранный интервал (5m–24h); длинные окна доступны после накопления истории.
-            Логи валидатора поступают через otelcol-contrib journald-receiver → Loki, хранятся 7 дней.
+            Data from the otelcol Prometheus endpoint on the BeeHive validator ({data?.source || 'no source'}).
+            Refreshed every {POLL_INTERVAL / 1000}s. CPU and memory history is stored in InfluxDB (db &quot;monad&quot;).
+            &quot;Node events&quot; counters tally errors for the selected interval (5m–24h); long windows become available as history accumulates.
+            Validator logs are shipped via otelcol-contrib journald-receiver → Loki, retained 7 days.
           </div>
 
           <div style={{ textAlign: 'center', marginTop: 40, paddingBottom: 32, color: 'var(--text-muted)', fontSize: 11, letterSpacing: '0.06em' }}>
@@ -1324,7 +1324,7 @@ function LogsView({ resp, header, maxHeight = 260 }: {
         border: '1px dashed rgba(201,168,76,0.1)', borderRadius: 4,
         fontSize: 10, color: 'rgba(138,136,112,0.7)', lineHeight: 1.5,
       }}>
-        {header ?? 'LOG MESSAGES (WARN+)'} — нет записей за выбранное окно.
+        {header ?? 'LOG MESSAGES (WARN+)'} — no entries in the selected window.
       </div>
     );
   }
@@ -1347,7 +1347,7 @@ function LogsView({ resp, header, maxHeight = 260 }: {
   return (
     <div style={{ marginTop: 14 }}>
       <div style={{ fontSize: 10, color: 'rgba(138,136,112,0.7)', marginBottom: 6, letterSpacing: '0.05em' }}>
-        {header ?? 'LOG MESSAGES (WARN+)'} · {resp.count} строк
+        {header ?? 'LOG MESSAGES (WARN+)'} · {resp.count} lines
       </div>
 
       {/* Annotation summary */}
@@ -1778,7 +1778,7 @@ function LogPanel({ range, customWindow }: { range: RangeKey; customWindow: Time
             color: warnCount > 0 ? '#E8A020' : 'rgba(138,136,112,0.6)',
             letterSpacing: '0.04em',
           }}>
-            {resp.count} {level}+ за {range}
+            {resp.count} {level}+ in {range}
           </span>
         )}
       </button>

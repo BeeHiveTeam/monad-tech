@@ -109,7 +109,7 @@ export default function AnalyticsPage() {
                 Site Analytics
               </h1>
               <div style={{ fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.6 }}>
-                Собственная аналитика в InfluxDB. Без cookie. IP не сохраняется — используется daily-rotated hash.
+                In-house analytics in InfluxDB. No cookies. IP is not stored — a daily-rotated hash is used instead.
               </div>
             </div>
             <div style={{ display: 'flex', gap: 6 }}>

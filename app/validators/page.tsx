@@ -1,6 +1,7 @@
 'use client';
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 import HexBg from '@/components/HexBg';
 import SiteHeader from '@/components/SiteHeader';
 import TabNav from '@/components/TabNav';
@@ -30,6 +31,9 @@ interface Validator {
 interface ValidatorsData {
   sampleSize: number;
   totalValidators: number;
+  activeValidators?: number;
+  producersInWindow?: number;
+  registeredCount?: number;
   windowSeconds: number;
   expectedGapSeconds: number;
   updatedAt: number;
@@ -51,7 +55,7 @@ const POLL_INTERVAL = 30_000;
 const POLL_INTERVAL_BUILDING = 15_000;
 
 const COL_KEYS = [
-  'num', 'moniker', 'address', 'stake', 'commission', 'score',
+  'select', 'num', 'moniker', 'address', 'stake', 'commission', 'score',
   'health', 'uptime', 'blocks', 'share', 'txs', 'lastBlock',
 ] as const;
 type ColKey = typeof COL_KEYS[number];
@@ -64,6 +68,7 @@ type ColKey = typeof COL_KEYS[number];
 //   blocks/txs — 5-digit numbers
 //   lastBlock — "5m" / "12h" / "3d" — small
 const DEFAULT_WIDTHS: Record<ColKey, number> = {
+  select: 36,
   num: 48, moniker: 200, address: 150, stake: 100, commission: 90,
   score: 80, health: 110, uptime: 90, blocks: 90, share: 80, txs: 100, lastBlock: 96,
 };
@@ -125,6 +130,25 @@ export default function ValidatorsPage() {
   const [resizing, setResizing] = useState<ColKey | null>(null);
   const [page, setPage] = useState(1);
   const [hideUnregistered, setHideUnregistered] = useState(false);
+  const [selectedForCompare, setSelectedForCompare] = useState<string[]>([]);
+
+  const toggleCompareSelect = useCallback((addr: string) => {
+    setSelectedForCompare(prev => {
+      if (prev.includes(addr)) return prev.filter(a => a !== addr);
+      if (prev.length >= 5) return prev;
+      return [...prev, addr];
+    });
+  }, []);
+
+  const goToCompare = useCallback(() => {
+    if (selectedForCompare.length === 0) {
+      router.push('/validators/compare');
+      return;
+    }
+    const params = new URLSearchParams();
+    for (const a of selectedForCompare) params.append('addr', a);
+    router.push(`/validators/compare?${params.toString()}`);
+  }, [selectedForCompare, router]);
   const PAGE_SIZE = 20;
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -192,15 +216,21 @@ export default function ValidatorsPage() {
     }
   }, [network]);
 
+  // Only re-mount the polling loop on network change. Earlier the deps
+  // included `data?.building` to switch between fast (15s) and slow (30s)
+  // intervals, but that caused a re-render storm: fetchData → setData →
+  // building toggles → effect reruns → setData(null) → fetchData again,
+  // hammering /api/validators and triggering 429s after PM2 restart while
+  // the WS ring was warming up. Stick to a single 30s cadence; during
+  // warmup the user sees a "loading" state for one cycle, no broken loop.
   useEffect(() => {
     setLoading(true);
     setData(null);
     fetchData();
     if (timerRef.current) clearInterval(timerRef.current);
-    const interval = data?.building ? POLL_INTERVAL_BUILDING : POLL_INTERVAL;
-    timerRef.current = setInterval(fetchData, interval);
+    timerRef.current = setInterval(fetchData, POLL_INTERVAL);
     return () => { if (timerRef.current) clearInterval(timerRef.current); };
-  }, [fetchData, network, data?.building]);
+  }, [fetchData, network]);
 
   function handleSort(key: SortKey) {
     setPage(1);
@@ -317,19 +347,33 @@ export default function ValidatorsPage() {
               borderBottom: '1px solid var(--border)',
               display: 'flex', flexDirection: 'column', gap: 12,
             }}>
-              {/* Tier 1: title + cadence */}
-              <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' }}>
+              {/* Tier 1: title + three semantic counters + cadence.
+                  "Active Validators 303" was misleading — the 303 row count
+                  mixes active-set members, registered-but-not-active, and
+                  cross-epoch producers (phantoms). Showing them broken out
+                  matches what the chain actually exposes. */}
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 14, flexWrap: 'wrap' }}>
                 <span style={{
                   fontFamily: 'Bebas Neue, sans-serif', fontSize: 18,
                   letterSpacing: '0.08em', color: 'var(--gold)',
                 }}>
-                  Active Validators
+                  Validators
                 </span>
-                <span style={{
-                  fontFamily: 'DM Mono, monospace', fontSize: 12,
-                  color: 'var(--text)',
-                }}>
-                  {processed.length}{search ? ` / ${data?.validators.length ?? 0}` : ''}
+                <span title="Validators currently in the consensus active set (snapshotStake ≥ threshold)"
+                  style={{ fontFamily: 'DM Mono, monospace', fontSize: 12, color: 'var(--text)' }}>
+                  active <span style={{ color: 'var(--gold)' }}>{data?.activeValidators ?? '—'}</span>
+                </span>
+                <span title="Producers seen in the current sample window (may include cross-epoch validators)"
+                  style={{ fontFamily: 'DM Mono, monospace', fontSize: 12, color: 'var(--text)' }}>
+                  produced <span style={{ color: 'var(--gold)' }}>{data?.producersInWindow ?? '—'}</span>
+                </span>
+                <span title="Validators with on-chain registry metadata (moniker, website, etc.)"
+                  style={{ fontFamily: 'DM Mono, monospace', fontSize: 12, color: 'var(--text)' }}>
+                  registered <span style={{ color: 'var(--gold)' }}>{data?.registeredCount ?? '—'}</span>
+                </span>
+                <span title="All rows shown in the table (active + registered + cross-epoch producers)"
+                  style={{ fontFamily: 'DM Mono, monospace', fontSize: 12, color: 'var(--text-muted)' }}>
+                  total <span style={{ color: 'var(--text)' }}>{processed.length}{search ? ` / ${data?.validators.length ?? 0}` : ''}</span>
                 </span>
                 <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
                   · updates every {POLL_INTERVAL / 1000}s
@@ -389,18 +433,52 @@ export default function ValidatorsPage() {
                     ↔ RESET COLUMNS
                   </button>
                   <button
-                    onClick={() => router.push('/validators/compare')}
-                    title="Compare 2-5 validators side-by-side"
+                    onClick={goToCompare}
+                    disabled={selectedForCompare.length === 1}
+                    title={
+                      selectedForCompare.length === 0
+                        ? 'Tick checkboxes on rows, or click to open empty compare view'
+                        : selectedForCompare.length === 1
+                        ? 'Pick at least one more validator (up to 5)'
+                        : `Compare ${selectedForCompare.length} selected validators side-by-side`
+                    }
                     style={{
-                      height: 28, padding: '0 12px',
-                      fontSize: 10, letterSpacing: '0.08em',
-                      background: 'transparent', color: 'var(--gold)',
-                      border: '1px solid var(--gold)', borderRadius: 6,
-                      cursor: 'pointer', fontFamily: 'DM Mono, monospace',
+                      height: 28, padding: '0 14px',
+                      fontSize: 10, letterSpacing: '0.08em', fontWeight: 600,
+                      background: selectedForCompare.length >= 2 ? 'rgba(201,168,76,0.28)' : 'rgba(201,168,76,0.12)',
+                      color: selectedForCompare.length === 1 ? 'var(--text-muted)' : 'var(--gold)',
+                      border: `1px solid ${selectedForCompare.length === 1 ? 'var(--border)' : 'var(--gold)'}`,
+                      borderRadius: 6,
+                      cursor: selectedForCompare.length === 1 ? 'not-allowed' : 'pointer',
+                      fontFamily: 'DM Mono, monospace',
+                      transition: 'background 0.15s',
+                    }}
+                    onMouseEnter={e => {
+                      if (selectedForCompare.length !== 1)
+                        e.currentTarget.style.background = 'rgba(201,168,76,0.36)';
+                    }}
+                    onMouseLeave={e => {
+                      e.currentTarget.style.background =
+                        selectedForCompare.length >= 2 ? 'rgba(201,168,76,0.28)' : 'rgba(201,168,76,0.12)';
                     }}
                   >
-                    ⇄ COMPARE
+                    {selectedForCompare.length === 0
+                      ? '⇄ COMPARE VALIDATORS'
+                      : `⇄ COMPARE ${selectedForCompare.length} SELECTED`}
                   </button>
+                  {selectedForCompare.length > 0 && (
+                    <button
+                      onClick={() => setSelectedForCompare([])}
+                      title="Clear comparison selection"
+                      style={{
+                        height: 28, padding: '0 10px',
+                        fontSize: 10, letterSpacing: '0.08em',
+                        background: 'transparent', color: 'var(--text-muted)',
+                        border: '1px solid var(--border)', borderRadius: 6,
+                        cursor: 'pointer', fontFamily: 'DM Mono, monospace',
+                      }}
+                    >× CLEAR</button>
+                  )}
                 </div>
                 <input
                   type="text"
@@ -430,7 +508,7 @@ export default function ValidatorsPage() {
               <div style={{ padding: '60px 0', textAlign: 'center', color: 'var(--text-muted)', fontSize: 13 }}>
                 {data?.message ?? 'Collecting validator data…'}
                 <div style={{ marginTop: 10, fontSize: 11, color: 'rgba(138,136,112,0.6)' }}>
-                  Автообновление каждые {POLL_INTERVAL_BUILDING / 1000}с до готовности
+                  Auto-refresh every {POLL_INTERVAL_BUILDING / 1000}s until ready
                 </div>
               </div>
             ) : !data || processed.length === 0 ? (
@@ -448,6 +526,12 @@ export default function ValidatorsPage() {
                   </colgroup>
                   <thead>
                     <tr>
+                      <th
+                        title="Tick rows to compare side-by-side (max 5)"
+                        style={{ textAlign: 'center', color: 'var(--text-muted)', fontSize: 10 }}
+                      >
+                        ⇄
+                      </th>
                       <th style={{ textAlign: 'left', color: 'var(--text-muted)' }}>
                         #
                         <ResizeHandle colKey="num" onMouseDown={startResize('num')} active={resizing === 'num'} />
@@ -508,13 +592,32 @@ export default function ValidatorsPage() {
                         uptimeDisplay < 80 ? '#C9A84C' : '#4CAF6E';
                       const sc = v.score;
                       const scColor = scoreColor(sc);
+                      const isSelected = selectedForCompare.includes(v.address);
+                      const selectionFull = selectedForCompare.length >= 5 && !isSelected;
                       return (
                         <tr key={v.address}
                           onClick={() => router.push(`/validators/${v.address}`)}
-                          style={{ cursor: 'pointer' }}
-                          onMouseEnter={e => (e.currentTarget.style.background = 'rgba(201,168,76,0.06)')}
-                          onMouseLeave={e => (e.currentTarget.style.background = '')}
+                          style={{
+                            cursor: 'pointer',
+                            background: isSelected ? 'rgba(201,168,76,0.12)' : '',
+                          }}
+                          onMouseEnter={e => (e.currentTarget.style.background = isSelected ? 'rgba(201,168,76,0.18)' : 'rgba(201,168,76,0.06)')}
+                          onMouseLeave={e => (e.currentTarget.style.background = isSelected ? 'rgba(201,168,76,0.12)' : '')}
                         >
+                          <td
+                            style={{ textAlign: 'center', whiteSpace: 'nowrap' }}
+                            onClick={e => { e.stopPropagation(); }}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              disabled={selectionFull}
+                              onChange={() => toggleCompareSelect(v.address)}
+                              onClick={e => e.stopPropagation()}
+                              title={selectionFull ? 'Comparison full (5 max). Untick another to add this one.' : 'Add to comparison'}
+                              style={{ accentColor: '#C9A84C', cursor: selectionFull ? 'not-allowed' : 'pointer' }}
+                            />
+                          </td>
                           <td style={{ color: 'var(--text-muted)', fontFamily: 'DM Mono, monospace', fontSize: 12, whiteSpace: 'nowrap' }}>
                             {i + 1}
                           </td>
@@ -544,15 +647,13 @@ export default function ValidatorsPage() {
                             )}
                           </td>
                           <td style={{ whiteSpace: 'nowrap' }}>
-                            <a
-                              href={`${explorer}/address/${v.address}`}
-                              target="_blank"
-                              rel="noopener noreferrer"
+                            <Link
+                              href={`/validators/${v.address}`}
                               onClick={e => e.stopPropagation()}
                               style={{ color: 'var(--text)', fontFamily: 'DM Mono, monospace', fontSize: 12, textDecoration: 'none' }}
                             >
                               {shortAddr(v.address)}
-                            </a>
+                            </Link>
                           </td>
                           {/* Stake */}
                           <td style={{ textAlign: 'right', fontFamily: 'DM Mono, monospace', fontSize: 12, whiteSpace: 'nowrap' }}>
@@ -646,25 +747,25 @@ export default function ValidatorsPage() {
 
             <div style={{ marginTop: 16, paddingTop: 12, borderTop: '1px solid var(--border)', fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.7 }}>
               <div style={{ marginBottom: 6 }}>
-                <b style={{ color: 'var(--text)' }}>Score</b> — рейтинг 0–100:
+                <b style={{ color: 'var(--text)' }}>Score</b> — 0–100 rating:
                 Health (40%) + Uptime (40%) + Recency (20%).{' '}
-                <span style={{ color: '#4CAF6E' }}>≥75</span> отлично,{' '}
-                <span style={{ color: '#C9A84C' }}>45–74</span> норма,{' '}
-                <span style={{ color: '#E05252' }}>&lt;45</span> проблема.
+                <span style={{ color: '#4CAF6E' }}>≥75</span> excellent,{' '}
+                <span style={{ color: '#C9A84C' }}>45–74</span> normal,{' '}
+                <span style={{ color: '#E05252' }}>&lt;45</span> problem.
               </div>
               <div style={{ marginBottom: 6 }}>
-                <b style={{ color: 'var(--text)' }}>Health</b> — время с последнего блока.{' '}
-                <span style={{ color: '#4CAF6E' }}>ACTIVE</span> = недавно лидировал,{' '}
-                <span style={{ color: '#C9A84C' }}>SLOW</span> = задержка 2–5× от среднего,{' '}
-                <span style={{ color: '#E05252' }}>MISSING</span> = не видно &gt;5×.
-                {data && <> Средний интервал: ~{data.expectedGapSeconds}s.</>}
+                <b style={{ color: 'var(--text)' }}>Health</b> — time since last block.{' '}
+                <span style={{ color: '#4CAF6E' }}>ACTIVE</span> = recently led,{' '}
+                <span style={{ color: '#C9A84C' }}>SLOW</span> = 2–5× delay vs average,{' '}
+                <span style={{ color: '#E05252' }}>MISSING</span> = not seen for &gt;5× expected.
+                {data && <> Average interval: ~{data.expectedGapSeconds}s.</>}
               </div>
               <div style={{ marginBottom: 6 }}>
-                <b style={{ color: 'var(--text)' }}>Uptime</b> — произведённые блоки ÷ ожидаемые (равный стейк). 100% = норма.
+                <b style={{ color: 'var(--text)' }}>Uptime</b> — blocks produced ÷ expected (stake-weighted). 100% = on target.
               </div>
               <div>
-                Данные из поля <code style={{ color: 'var(--gold-dim)' }}>miner</code> последних {data?.sampleSize ?? 0} блоков.
-                Monad public RPC не отдаёт голоса/пиры — метрики только по лидирующим блокам.
+                Data from the <code style={{ color: 'var(--gold-dim)' }}>miner</code> field of the last {data?.sampleSize ?? 0} blocks.
+                Monad public RPC doesn&apos;t expose votes / peers — metrics are computed from leader blocks only.
               </div>
             </div>
           </div>

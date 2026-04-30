@@ -150,6 +150,61 @@ export function getRegistryEntries() {
 // capture validators that don't have GitHub metadata (observed 269 on chain
 // vs 254 in the GitHub repo as of 2026-04-22). GitHub data is joined as a
 // metadata overlay — unknown IDs simply lack a moniker.
+// `getConsensusValidatorSet` selector. Returns paginated tuples of
+// (bool isDone, uint32 nextIndex, uint64[] valIds). One call returns up to
+// 100 IDs; we paginate until isDone=true. This is the CANONICAL source of
+// the active set — Monad selects top-200 staked validators per epoch via
+// syscallSnapshot. Per docs.monad.xyz/reference/staking/api.
+const CONSENSUS_SET_SELECTOR = '0xfb29b729';
+
+let _consensusIds: Set<number> = new Set();
+let _consensusFetchedAt = 0;
+
+export function getConsensusIds(): Set<number> {
+  return _consensusIds;
+}
+
+export function getConsensusFetchedAt(): number {
+  return _consensusFetchedAt;
+}
+
+async function fetchConsensusSet(rpcUrl: string): Promise<Set<number>> {
+  const ids = new Set<number>();
+  let startIndex = 0;
+  // Hard cap at 5 pages = 500 IDs to avoid infinite loop on broken RPC.
+  for (let page = 0; page < 5; page++) {
+    const startHex = startIndex.toString(16).padStart(64, '0');
+    const data = CONSENSUS_SET_SELECTOR + startHex;
+    const res = await fetch(rpcUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0', id: 1, method: 'eth_call',
+        params: [{ to: STAKING_PRECOMPILE, data }, 'latest'],
+      }),
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!res.ok) throw new Error(`getConsensusValidatorSet HTTP ${res.status}`);
+    const j = await res.json() as { result?: string; error?: { message: string } };
+    if (j.error) throw new Error(j.error.message);
+    const raw = j.result ?? '';
+    if (raw.length < 130) break;
+    const hex = raw.slice(2);
+    const isDone = parseInt(hex.slice(0, 64), 16) !== 0;
+    const nextIndex = parseInt(hex.slice(64, 128), 16);
+    const arrOffset = parseInt(hex.slice(128, 192), 16) * 2;
+    const arrLen = parseInt(hex.slice(arrOffset, arrOffset + 64), 16);
+    for (let i = 0; i < arrLen; i++) {
+      const pos = arrOffset + 64 + i * 64;
+      if (pos + 64 > hex.length) break;
+      ids.add(parseInt(hex.slice(pos, pos + 64), 16));
+    }
+    if (isDone || arrLen === 0) break;
+    startIndex = nextIndex;
+  }
+  return ids;
+}
+
 async function enumerateOnChain(rpcUrl: string, maxProbeId = 500): Promise<Map<number, ChainValidatorData>> {
   const result = new Map<number, ChainValidatorData>();
   // BATCH 50→25 to align with [[monad-rpc-pacing]] hard rule (cap at 25).
@@ -195,12 +250,24 @@ export async function ensureRegistryLoaded(rpcUrl: string): Promise<void> {
   lastFetch = Date.now();
 
   try {
-    // Primary source: enumerate the staking precompile directly.
-    // Secondary: GitHub monikers/websites keyed by same validator ID.
-    const [chainMap, github] = await Promise.all([
+    // Primary sources, run in parallel:
+    //   1. enumerateOnChain — read each validator's stake/commission/auth via
+    //      getValidator(id) for IDs 1..maxProbeId. Captures all known validators.
+    //   2. fetchConsensusSet — call getConsensusValidatorSet, the CANONICAL
+    //      active-set source per Monad docs (top-200 staked, paginated). Earlier
+    //      we approximated active set with `stakeMon >= 10M` which can drift
+    //      from canonical by a few validators (cap, ties, snapshot freshness).
+    //   3. GitHub monikers — metadata overlay keyed by validator ID.
+    const [chainMap, consensusIds, github] = await Promise.all([
       enumerateOnChain(rpcUrl, 800),
+      fetchConsensusSet(rpcUrl).catch(err => {
+        console.error('[registry] getConsensusValidatorSet failed, falling back to stake threshold:', err);
+        return new Set<number>();
+      }),
       fetchGithubValidators().catch(() => [] as GithubValidatorInfo[]),
     ]);
+    _consensusIds = consensusIds;
+    _consensusFetchedAt = Date.now();
     const githubById = new Map<number, GithubValidatorInfo>();
     for (const g of github) githubById.set(g.id, g);
 
@@ -222,7 +289,7 @@ export async function ensureRegistryLoaded(rpcUrl: string): Promise<void> {
 
     loadRegistry(entries);
     // eslint-disable-next-line no-console
-    console.log(`[registry] Loaded ${entries.length} validators on-chain (${github.length} with GitHub metadata)`);
+    console.log(`[registry] Loaded ${entries.length} validators on-chain (${github.length} with GitHub metadata, ${consensusIds.size} in canonical consensus set)`);
   } catch (e) {
     lastFetch = 0;
     console.error('[registry] Failed to load:', e);
