@@ -1,16 +1,22 @@
 import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'crypto';
+import os from 'os';
+import { INFLUX_URL, INFLUX_DB } from '@/lib/config';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
-const INFLUX_URL = process.env.INFLUX_URL || 'https://localhost:8086';
-const INFLUX_DB = process.env.INFLUX_DB || 'monad';
-
 // Privacy: we hash the IP with a daily-rotating salt so the same visitor
 // deduplicates within a day but cannot be correlated across days.
-// The salt is derived from the server's install; not stored in plaintext.
-const SALT_BASE = process.env.ANALYTICS_SALT || process.env.NODE_AUTH_PASSWORD || 'fallback-salt-changeme';
+//
+// Salt resolution order:
+//   1. ANALYTICS_SALT env var (preferred — set explicitly per deployment)
+//   2. SHA-256(hostname) derived stably from the OS install
+// We deliberately don't fall through to NODE_AUTH_PASSWORD anymore — that
+// coupling was an oversight and would expose the auth password's hash domain
+// to anyone with sufficient analytics output to bruteforce.
+const SALT_BASE = process.env.ANALYTICS_SALT
+  || crypto.createHash('sha256').update(`monad-stats-analytics:${os.hostname()}`).digest('hex');
 
 function todayStr(): string {
   // UTC day key, rotates at midnight

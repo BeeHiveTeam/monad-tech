@@ -23,10 +23,7 @@
 import WebSocket from 'ws';
 
 // ── Config ────────────────────────────────────────────────────────────────
-const WS_URL = process.env.MONAD_WS_URL ?? 'ws://15.235.117.52:8081';
-const HTTP_RPC = process.env.MONAD_RPC_URL ?? 'http://15.235.117.52:8080';
-const INFLUX_URL = process.env.INFLUX_URL ?? 'https://localhost:8086';
-const INFLUX_DB = process.env.INFLUX_DB ?? 'monad';
+import { MONAD_WS_URL as WS_URL, MONAD_RPC_URL as HTTP_RPC, INFLUX_URL, INFLUX_DB } from './config';
 const RING_SIZE = 9000;        // ~60 min @ 0.4s block time — covers 1h window
                                // of /api/top-contracts fully once ring is warm.
                                // Was 2500 (covered only 15m). Memory cost:

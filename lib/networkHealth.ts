@@ -4,10 +4,7 @@
 // into separate webpack chunks — a plain module-level `const` would otherwise
 // give each chunk its own copy and readers would see empty data.
 
-const RPC_URL = process.env.MONAD_RPC_URL || 'https://testnet-rpc.monad.xyz';
-const LOKI_URL = process.env.LOKI_URL || 'http://127.0.0.1:3100';
-const INFLUX_URL = process.env.INFLUX_URL || 'https://localhost:8086';
-const INFLUX_DB = process.env.INFLUX_DB || 'monad';
+import { MONAD_RPC_URL as RPC_URL, LOKI_URL, INFLUX_URL, INFLUX_DB, NODE_METRICS_URL } from './config';
 
 // ── InfluxDB persistence helpers ─────────────────────────────────────────
 // Reorgs and validator-set changes are rare but matter. Historically we kept
@@ -330,7 +327,9 @@ export async function getClientVersion(): Promise<{
 // Scrape `service_version` from our validator's otelcol Prometheus endpoint.
 // Every Monad metric is tagged with this label — it reflects the actually
 // running binary, not whatever the public RPC gateway is on.
-const OTELCOL_METRICS = process.env.MONAD_METRICS_URL || 'http://15.235.117.52:8889/metrics';
+// MONAD_METRICS_URL retained as alternate env var name for backwards compat;
+// fall through to NODE_METRICS_URL via config.
+const OTELCOL_METRICS = process.env.MONAD_METRICS_URL || NODE_METRICS_URL;
 
 async function getInstalledVersion(): Promise<string | null> {
   interface Cache { ver: string | null; ts: number }
