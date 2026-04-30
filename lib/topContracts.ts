@@ -19,6 +19,7 @@
 import { rpcBatch, getBlockNumber } from './rpc';
 import { NetworkId } from './networks';
 import { ExecStat, fetchExecStats } from './execStats';
+import { INFLUX_URL, INFLUX_DB } from './config';
 
 export interface ContractRow {
   address: string;
@@ -39,6 +40,14 @@ interface BlockTxs {
 // buffer (lib/wsBlockStream) — most recent ~1000 blocks served from RAM, RPC
 // fetch only for older blocks beyond ring window.
 const BATCH_SIZE = 25;
+
+// Precompile / system address range: 0x000…0000 through 0x000…ffff.
+// Monad's staking precompile sits at 0x…1000 and receives `syscallReward`
+// every block (Foundation auto-delegates 25 MON per block) — without this
+// filter it dominates the top-list and skews the parallelism picture.
+function isSystemAddress(addr: string): boolean {
+  return /^0x0{36}[0-9a-f]{4}$/.test(addr);
+}
 
 async function fetchBlocksWithTxs(
   network: NetworkId,
@@ -148,6 +157,7 @@ export async function computeTopContracts(
     // contract is called multiple times in the same block.
     const seenInBlock = new Set<string>();
     for (const to of b.tos) {
+      if (isSystemAddress(to)) continue;
       totalTx++;
       if (!seenInBlock.has(to)) {
         seenInBlock.add(to);
@@ -223,9 +233,6 @@ export async function getTopContractsCached(
 // The 60s in-memory cache above remains as a faster path; InfluxDB is the
 // fallback that replaces the live RPC compute path.
 
-const INFLUX_URL = process.env.INFLUX_URL ?? 'https://localhost:8086';
-const INFLUX_DB = process.env.INFLUX_DB ?? 'monad';
-
 function escapeInfluxStr(v: string): string {
   return v.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
@@ -281,11 +288,18 @@ export async function fetchTopContractsFromInflux(
   }
 }
 
-const WINDOWS: Array<{ name: string; sec: number }> = [
-  { name: '5m', sec: 300 },
-  { name: '15m', sec: 900 },
-  { name: '1h', sec: 3600 },
+const WINDOWS: Array<{ name: string; sec: number; min: number }> = [
+  // minAppearances scales with window size — 5 blocks in 1h is statistical
+  // noise, while 100 blocks in a 5m window would filter out everything.
+  // Rule of thumb: ~3% of analyzed blocks for stat significance.
+  { name: '5m',  sec: 300,  min: 20 },
+  { name: '15m', sec: 900,  min: 50 },
+  { name: '1h',  sec: 3600, min: 100 },
 ];
+
+export const WINDOW_DEFAULT_MIN: Record<string, number> = {
+  '5m': 20, '15m': 50, '1h': 100,
+};
 
 /**
  * Background tick: compute top-contracts for all windows + write to InfluxDB.
@@ -308,7 +322,7 @@ export async function tickTopContractsWriter(network: NetworkId): Promise<void> 
   for (const w of WINDOWS) {
     if (ringSize < minRingForWindow(w.sec)) continue;
     try {
-      const result = await getTopContractsCached(network, w.sec, 5, 20);
+      const result = await getTopContractsCached(network, w.sec, w.min, 20);
       await writeTopContractsSnapshot(network, w.name, result);
     } catch { /* try next window */ }
   }
