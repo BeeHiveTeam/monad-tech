@@ -206,7 +206,7 @@ export default function AnalyticsPage() {
                 </Section>
               )}
 
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(420px, 1fr))', gap: 16 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(420px, 100%), 1fr))', gap: 16 }}>
                 <Section title="TOP PAGES">
                   {d.topPaths.length === 0 ? (
                     <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>No data yet.</div>

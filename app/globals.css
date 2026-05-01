@@ -273,6 +273,38 @@ img, video { max-width: 100%; height: auto; }
   gap: 24px;
 }
 
+/* IncidentTimeline rows */
+.incident-time-abs { display: inline; }
+@media (max-width: 720px) {
+  /* Right-aligned absolute timestamp doesn't fit at 360-375px and the
+     "Xm ago" chip on the left already conveys time. Hide the absolute
+     time and let the title column take the freed space. */
+  .incident-time-abs { display: none !important; }
+  .incident-row { grid-template-columns: 20px 80px 1fr !important; gap: 8px !important; padding: 10px 10px !important; }
+}
+
+/* BeeHive hero — stack vertically on mobile to fit 32px font + 64px logo
+   without overflow */
+@media (max-width: 720px) {
+  .beehive-hero { padding: 20px 16px !important; }
+  .beehive-hero-grid {
+    grid-template-columns: 1fr !important;
+    gap: 12px !important;
+    text-align: left !important;
+  }
+  .beehive-hero-grid > div:last-child { align-items: flex-start !important; }
+}
+
+/* Recharts polish for mobile — denser tick labels overflow at <420px */
+@media (max-width: 720px) {
+  .recharts-cartesian-axis-tick text { font-size: 9px !important; }
+  .recharts-tooltip-wrapper { font-size: 11px !important; }
+  /* Hide every-other X tick text when width is very tight */
+}
+@media (max-width: 420px) {
+  .recharts-xAxis .recharts-cartesian-axis-tick:nth-child(odd) text { display: none; }
+}
+
 @media (max-width: 720px) {
   .row-top10 {
     grid-template-columns: 24px 1fr auto;

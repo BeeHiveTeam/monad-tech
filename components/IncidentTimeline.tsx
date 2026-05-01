@@ -231,6 +231,7 @@ export default function IncidentTimeline() {
               <div
                 key={i.id}
                 onClick={() => toggle(i.id)}
+                className="incident-row"
                 style={{
                   display: 'grid',
                   gridTemplateColumns: '20px 90px 1fr auto',
@@ -310,8 +311,8 @@ export default function IncidentTimeline() {
                   )}
                 </div>
 
-                {/* Time */}
-                <span style={{
+                {/* Time — hidden on mobile (the chip column already shows "Xm ago") */}
+                <span className="incident-time-abs" style={{
                   fontSize: 10, color: 'var(--text-muted)',
                   fontFamily: 'DM Mono, monospace', whiteSpace: 'nowrap',
                 }}>

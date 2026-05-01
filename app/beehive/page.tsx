@@ -82,12 +82,12 @@ export default function BeeHivePage() {
           <TabNav />
 
           {/* HERO */}
-          <div className="card" style={{
+          <div className="card beehive-hero" style={{
             padding: 32, marginBottom: 20,
             background: 'linear-gradient(135deg, rgba(201,168,76,0.08) 0%, rgba(8,8,8,0.6) 100%)',
             border: '1px solid rgba(201,168,76,0.3)',
           }}>
-            <div style={{
+            <div className="beehive-hero-grid" style={{
               display: 'grid', gridTemplateColumns: 'auto 1fr auto',
               gap: 20, alignItems: 'center', flexWrap: 'wrap',
             }}>
@@ -197,7 +197,9 @@ export default function BeeHivePage() {
           {/* TWO COLUMN: Why us · Delegate CTA */}
           <div style={{
             display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))',
+            // min(340px, 100%) prevents the column from forcing overflow on
+            // viewports narrower than 340px (mobile).
+            gridTemplateColumns: 'repeat(auto-fit, minmax(min(340px, 100%), 1fr))',
             gap: 16, marginBottom: 16,
           }}>
             {/* Why us */}
