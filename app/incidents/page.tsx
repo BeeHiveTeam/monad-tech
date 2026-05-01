@@ -3,6 +3,7 @@ import HexBg from '@/components/HexBg';
 import SiteHeader from '@/components/SiteHeader';
 import TabNav from '@/components/TabNav';
 import IncidentTimeline from '@/components/IncidentTimeline';
+import MainnetSoonCard from '@/components/MainnetSoonCard';
 import { useNetwork } from '@/lib/useNetwork';
 
 export default function IncidentsPage() {
@@ -33,7 +34,14 @@ export default function IncidentsPage() {
             </span>
           </div>
 
-          <IncidentTimeline />
+          {network === 'testnet' ? (
+            <IncidentTimeline />
+          ) : (
+            <MainnetSoonCard
+              title="INCIDENT TIMELINE"
+              description="Reorgs, validator-set churn, retry spikes, block stalls and critical logs are detected by our anomaly detectors which scrape Prometheus + Loki from a node we operate. Mainnet feed will activate when we run a mainnet validator."
+            />
+          )}
         </main>
       </div>
     </>

@@ -28,7 +28,10 @@ interface ChainValidatorData {
 const STAKING_PRECOMPILE = '0x0000000000000000000000000000000000001000';
 const GITHUB_API = 'https://api.github.com/repos/monad-developers/validator-info/contents/testnet';
 
-let lastFetch = 0;
+// Per-network last-fetch timestamps. Testnet and mainnet have separate
+// state so a mainnet load doesn't reset the testnet TTL clock.
+import type { NetworkId } from './networks';
+const _lastFetch: Map<NetworkId, number> = new Map();
 const REGISTRY_TTL_MS = 60 * 60_000; // 1 hour
 
 async function fetchGithubValidators(): Promise<GithubValidatorInfo[]> {
@@ -142,8 +145,8 @@ async function fetchChainData(
   return result;
 }
 
-export function getRegistryEntries() {
-  return getRegistrySnapshot();
+export function getRegistryEntries(network: NetworkId = 'testnet') {
+  return getRegistrySnapshot(network);
 }
 
 // Enumerate all validator IDs directly from the staking precompile so we
@@ -157,15 +160,17 @@ export function getRegistryEntries() {
 // syscallSnapshot. Per docs.monad.xyz/reference/staking/api.
 const CONSENSUS_SET_SELECTOR = '0xfb29b729';
 
-let _consensusIds: Set<number> = new Set();
-let _consensusFetchedAt = 0;
+// Per-network consensus set. Testnet has a populated active set;
+// mainnet's staking precompile is currently empty.
+const _consensusIdsMap: Map<NetworkId, Set<number>> = new Map();
+const _consensusFetchedAtMap: Map<NetworkId, number> = new Map();
 
-export function getConsensusIds(): Set<number> {
-  return _consensusIds;
+export function getConsensusIds(network: NetworkId = 'testnet'): Set<number> {
+  return _consensusIdsMap.get(network) ?? new Set();
 }
 
-export function getConsensusFetchedAt(): number {
-  return _consensusFetchedAt;
+export function getConsensusFetchedAt(network: NetworkId = 'testnet'): number {
+  return _consensusFetchedAtMap.get(network) ?? 0;
 }
 
 async function fetchConsensusSet(rpcUrl: string): Promise<Set<number>> {
@@ -245,9 +250,10 @@ async function enumerateOnChain(rpcUrl: string, maxProbeId = 500): Promise<Map<n
   return result;
 }
 
-export async function ensureRegistryLoaded(rpcUrl: string): Promise<void> {
-  if (Date.now() - lastFetch < REGISTRY_TTL_MS) return;
-  lastFetch = Date.now();
+export async function ensureRegistryLoaded(rpcUrl: string, network: NetworkId = 'testnet'): Promise<void> {
+  const last = _lastFetch.get(network) ?? 0;
+  if (Date.now() - last < REGISTRY_TTL_MS) return;
+  _lastFetch.set(network, Date.now());
 
   try {
     // Primary sources, run in parallel:
@@ -266,8 +272,8 @@ export async function ensureRegistryLoaded(rpcUrl: string): Promise<void> {
       }),
       fetchGithubValidators().catch(() => [] as GithubValidatorInfo[]),
     ]);
-    _consensusIds = consensusIds;
-    _consensusFetchedAt = Date.now();
+    _consensusIdsMap.set(network, consensusIds);
+    _consensusFetchedAtMap.set(network, Date.now());
     const githubById = new Map<number, GithubValidatorInfo>();
     for (const g of github) githubById.set(g.id, g);
 
@@ -287,11 +293,11 @@ export async function ensureRegistryLoaded(rpcUrl: string): Promise<void> {
       };
     });
 
-    loadRegistry(entries);
+    loadRegistry(entries, network);
     // eslint-disable-next-line no-console
-    console.log(`[registry] Loaded ${entries.length} validators on-chain (${github.length} with GitHub metadata, ${consensusIds.size} in canonical consensus set)`);
+    console.log(`[registry] [${network}] Loaded ${entries.length} validators on-chain (${github.length} with GitHub metadata, ${consensusIds.size} in canonical consensus set)`);
   } catch (e) {
-    lastFetch = 0;
-    console.error('[registry] Failed to load:', e);
+    _lastFetch.delete(network);
+    console.error(`[registry] [${network}] Failed to load:`, e);
   }
 }

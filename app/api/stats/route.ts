@@ -44,8 +44,10 @@ export async function GET(req: NextRequest) {
     let txInLatest = 0;
     let ringSource = false;
 
-    const ring = getRingBlocks(10);
-    const ringTip = getRingTip();
+    // The ring buffer is filled by our testnet WS subscription only —
+    // bypass it for mainnet (we'd serve testnet data otherwise).
+    const ring = network === 'testnet' ? getRingBlocks(10) : [];
+    const ringTip = network === 'testnet' ? getRingTip() : null;
     if (ring.length >= 2 && ringTip) {
       recent = ring.map(b => ({
         ts: b.timestamp,
@@ -61,7 +63,7 @@ export async function GET(req: NextRequest) {
 
     // gasPrice is not in newHeads push; still needs eth_gasPrice. One method
     // per request, plus optional fallback for blocks.
-    const tipPromise = ringSource ? Promise.resolve(latestBlockNum) : getTipNumber();
+    const tipPromise = ringSource ? Promise.resolve(latestBlockNum) : getTipNumber(network);
     const blocksPromise = ringSource
       ? Promise.resolve([] as unknown[])
       : getLatestBlocksBatched(network, 10, false);
