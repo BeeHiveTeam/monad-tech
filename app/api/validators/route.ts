@@ -38,8 +38,13 @@ const cache = new Map<NetworkId, CacheEntry>();
 const refreshing = new Map<NetworkId, boolean>();
 
 async function computeValidators(network: NetworkId) {
-  const rpcUrl = process.env.MONAD_RPC_URL ?? NETWORKS[network].rpc;
-  await ensureRegistryLoaded(rpcUrl);
+  // Testnet uses our own validator (faster + higher limits) when MONAD_RPC_URL
+  // is set; mainnet always goes through the public RPC configured in
+  // NETWORKS.mainnet.rpc until we run our own mainnet node.
+  const rpcUrl = (network === 'testnet' && process.env.MONAD_RPC_URL)
+    ? process.env.MONAD_RPC_URL
+    : NETWORKS[network].rpc;
+  await ensureRegistryLoaded(rpcUrl, network);
 
   // batch=20 + pauseMs=200ms — restored 2026-04-27 16:40 UTC after measurement
   // showed batch=25 in combination with concurrent pollers caused conn pool to
@@ -53,7 +58,7 @@ async function computeValidators(network: NetworkId) {
   // Build a quick lookup from validatorId → authAddress so we can attribute
   // blocks to their producer regardless of beneficiary config.
   const idToAuth = new Map<number, string>();
-  for (const e of getRegistryEntries()) {
+  for (const e of getRegistryEntries(network)) {
     if (e.id) idToAuth.set(e.id, e.authAddress.toLowerCase());
   }
 
@@ -139,7 +144,7 @@ async function computeValidators(network: NetworkId) {
   // Seed stats map with every on-chain validator from the registry, so that
   // validators who haven't produced blocks in the sample window still appear
   // (with zero blocks → health=missing). Without this we only see miners.
-  for (const info of getRegistryEntries()) {
+  for (const info of getRegistryEntries(network)) {
     const addr = info.authAddress.toLowerCase();
     if (!addr || addr === '0x0000000000000000000000000000000000000000') continue;
     if (!stats.has(addr)) {
@@ -165,10 +170,10 @@ async function computeValidators(network: NetworkId) {
   // Stake-weighted: a validator's expected blocks-produced is
   // `blocks.length × (its stake / total active stake)`, NOT `blocks.length / N`.
   const ACTIVE_STAKE_MIN = 10_000_000;  // protocol minimum, fallback only
-  const consensusIds = getConsensusIds();
+  const consensusIds = getConsensusIds(network);
   const useCanonicalSet = consensusIds.size > 0;
   let totalActiveStake = 0;
-  for (const info of getRegistryEntries()) {
+  for (const info of getRegistryEntries(network)) {
     const inSet = useCanonicalSet
       ? consensusIds.has(info.id)
       : (info.stakeMon ?? 0) >= ACTIVE_STAKE_MIN;
@@ -207,7 +212,7 @@ async function computeValidators(network: NetworkId) {
       );
       const activeRatio = windowSeconds > 0 ? activeWindowSec / windowSeconds : 1;
 
-      const info = getValidatorInfo(v.address);
+      const info = getValidatorInfo(v.address, network);
       const stakeMon = info?.stakeMon ?? null;
       // Canonical active-set check: validator ID is in the result of
       // getConsensusValidatorSet(). Falls back to the stake threshold only
@@ -325,7 +330,7 @@ async function computeValidators(network: NetworkId) {
   const producersInWindow = validators.filter(v => v.blocksProduced > 0).length;
   const activeOperators = validators.filter(v => v.isActiveSet).length;
   const activeValidators = useCanonicalSet ? consensusIds.size : activeOperators;
-  const registeredCount = getRegistryEntries().length;
+  const registeredCount = getRegistryEntries(network).length;
 
   return {
     network,

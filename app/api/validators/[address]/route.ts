@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getLatestBlocksBatched } from '@/lib/rpc';
 import { getValidatorInfo } from '@/lib/validator-monikers';
 import { ensureRegistryLoaded, getRegistryEntries, getConsensusIds } from '@/lib/validator-registry';
-import { NETWORKS } from '@/lib/networks';
+import { NETWORKS, NetworkId } from '@/lib/networks';
 import { getBlockCache, setBlockCache } from '@/lib/block-cache';
 import { getValidatorIdForBlock, getBeneficiaryForValidator } from '@/lib/beneficiaryMap';
 
@@ -18,7 +18,12 @@ export async function GET(
   const { address } = await params;
   const addr = address.toLowerCase();
 
-  const cached = cache.get(addr);
+  // Network resolution: prefer ?network=, fall back to testnet.
+  const rawNet = req.nextUrl.searchParams.get('network') ?? 'testnet';
+  const network: NetworkId = (rawNet === 'mainnet' ? 'mainnet' : 'testnet');
+
+  const cacheKey = `${network}:${addr}`;
+  const cached = cache.get(cacheKey);
   if (cached && Date.now() - cached.ts < CACHE_TTL) {
     return NextResponse.json(cached.data);
   }
@@ -26,22 +31,21 @@ export async function GET(
   const RECENT_SHOW = 20;
 
   try {
-    const rpcUrl = process.env.MONAD_RPC_URL ?? NETWORKS['testnet'].rpc;
-    await ensureRegistryLoaded(rpcUrl);
+    // Same RPC routing as list-API: testnet via our local validator,
+    // mainnet via the public RPC from NETWORKS.mainnet.rpc.
+    const rpcUrl = (network === 'testnet' && process.env.MONAD_RPC_URL)
+      ? process.env.MONAD_RPC_URL
+      : NETWORKS[network].rpc;
+    await ensureRegistryLoaded(rpcUrl, network);
 
-    // Use shared block cache from validators API if fresh, otherwise fetch own sample
-    let blocks = getBlockCache('testnet') as {
+    let blocks = getBlockCache(network) as {
       miner: string; number: string; timestamp: string;
       transactions: unknown[]; hash: string;
     }[] | null;
 
     if (!blocks) {
-      // Match list-API SAMPLE_BLOCKS=500 so sharePct/blocksProduced/etc. are
-      // computed on the same window — otherwise list shows "21 blocks" and
-      // detail shows "76 blocks" for the same validator depending on which
-      // endpoint was hit first (cache empty vs warm).
-      const fetched = await getLatestBlocksBatched('testnet', 500, false, 20, 200);
-      setBlockCache('testnet', fetched as Parameters<typeof setBlockCache>[1]);
+      const fetched = await getLatestBlocksBatched(network, 500, false, 20, 200);
+      setBlockCache(network, fetched as Parameters<typeof setBlockCache>[1]);
       blocks = fetched as NonNullable<typeof blocks>;
     }
 
@@ -69,7 +73,7 @@ export async function GET(
     // This catches validators with non-authAddress beneficiaries (separate
     // rewards wallets, 0x0, etc.) — the same pattern that made shadowoftime
     // appear to have 0 blocks despite producing them.
-    const _info = getValidatorInfo(addr);
+    const _info = getValidatorInfo(addr, network);
     const targetValidatorId = _info?.validatorId ?? null;
     const myBlocks = validBlocks.filter(b => {
       const bn = parseInt(b.number, 16);
@@ -120,7 +124,7 @@ export async function GET(
 
     const info = _info;
     const stakeMon = info?.stakeMon ?? null;
-    const consensusIds = getConsensusIds();
+    const consensusIds = getConsensusIds(network);
     const useCanonicalSet = consensusIds.size > 0;
     const isActiveSet = useCanonicalSet
       ? (info?.validatorId != null && consensusIds.has(info.validatorId))
@@ -131,7 +135,7 @@ export async function GET(
     // windowSeconds / (blocks.length × stakeShare). Falls back to global mean
     // for non-active-set / unknown stake.
     let totalActiveStake = 0;
-    for (const e of getRegistryEntries()) {
+    for (const e of getRegistryEntries(network)) {
       const inSet = useCanonicalSet
         ? consensusIds.has(e.id)
         : (e.stakeMon ?? 0) >= 10_000_000;
@@ -205,7 +209,7 @@ export async function GET(
       fetchedAt: Date.now(),
     };
 
-    cache.set(addr, { ts: Date.now(), data });
+    cache.set(cacheKey, { ts: Date.now(), data });
     return NextResponse.json(data);
   } catch (err) {
     return NextResponse.json({ error: String(err), address: addr }, { status: 500 });

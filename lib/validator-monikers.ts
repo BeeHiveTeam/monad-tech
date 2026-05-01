@@ -1,3 +1,5 @@
+import type { NetworkId } from './networks';
+
 export interface ValidatorInfo {
   moniker: string;
   website?: string;
@@ -19,8 +21,11 @@ const STATIC_INFO: Record<string, ValidatorInfo> = {
   },
 };
 
-let _registry: Map<string, ValidatorInfo> | null = null;
-let _registryUpdatedAt = 0;
+// Per-network registry — testnet and mainnet have separate validator sets,
+// and mainnet currently has none on-chain. Keeping them isolated prevents
+// one network's data from leaking into the other after a network switch.
+const _registries: Map<NetworkId, Map<string, ValidatorInfo>> = new Map();
+const _registryUpdatedAt: Map<NetworkId, number> = new Map();
 
 export interface RegistryEntry {
   id: number;
@@ -35,10 +40,10 @@ export interface RegistryEntry {
   commissionPct?: number;
 }
 
-export function loadRegistry(entries: RegistryEntry[]): void {
-  _registry = new Map();
+export function loadRegistry(entries: RegistryEntry[], network: NetworkId = 'testnet'): void {
+  const reg = new Map<string, ValidatorInfo>();
   for (const e of entries) {
-    _registry.set(e.authAddress.toLowerCase(), {
+    reg.set(e.authAddress.toLowerCase(), {
       moniker: e.name,
       website: e.website,
       description: e.description,
@@ -50,29 +55,31 @@ export function loadRegistry(entries: RegistryEntry[]): void {
       commissionPct: e.commissionPct,
     });
   }
-  _registryUpdatedAt = Date.now();
+  _registries.set(network, reg);
+  _registryUpdatedAt.set(network, Date.now());
 }
 
-export function getValidatorInfo(address: string): ValidatorInfo | null {
+export function getValidatorInfo(address: string, network: NetworkId = 'testnet'): ValidatorInfo | null {
   const key = address.toLowerCase();
-  return _registry?.get(key) ?? STATIC_INFO[key] ?? null;
+  return _registries.get(network)?.get(key) ?? STATIC_INFO[key] ?? null;
 }
 
-export function getMoniker(address: string): string | null {
-  return getValidatorInfo(address)?.moniker ?? null;
+export function getMoniker(address: string, network: NetworkId = 'testnet'): string | null {
+  return getValidatorInfo(address, network)?.moniker ?? null;
 }
 
-export function registrySize(): number {
-  return _registry?.size ?? 0;
+export function registrySize(network: NetworkId = 'testnet'): number {
+  return _registries.get(network)?.size ?? 0;
 }
 
-export function registryAge(): number {
-  return _registryUpdatedAt;
+export function registryAge(network: NetworkId = 'testnet'): number {
+  return _registryUpdatedAt.get(network) ?? 0;
 }
 
-export function getRegistrySnapshot(): { authAddress: string; name: string; id: number; secp: string; website?: string; description?: string; logo?: string; x?: string; stakeMon?: number; commissionPct?: number }[] {
-  if (!_registry) return [];
-  return Array.from(_registry.entries()).map(([addr, info]) => ({
+export function getRegistrySnapshot(network: NetworkId = 'testnet'): { authAddress: string; name: string; id: number; secp: string; website?: string; description?: string; logo?: string; x?: string; stakeMon?: number; commissionPct?: number }[] {
+  const reg = _registries.get(network);
+  if (!reg) return [];
+  return Array.from(reg.entries()).map(([addr, info]) => ({
     authAddress: addr,
     name: info.moniker,
     id: info.validatorId ?? 0,

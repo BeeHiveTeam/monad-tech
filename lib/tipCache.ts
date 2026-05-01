@@ -9,11 +9,14 @@
  * once per new block, which is as fresh as we can reliably be anyway.
  */
 
-const LOCAL_RPC = process.env.MONAD_RPC_URL;
-const PUBLIC_RPC = 'https://testnet-rpc.monad.xyz';
-const RPC_URL = LOCAL_RPC || PUBLIC_RPC;
+import { NETWORKS, NetworkId } from './networks';
 
 const TIP_TTL_MS = 500;
+
+function rpcUrlFor(network: NetworkId): string {
+  if (network === 'testnet' && process.env.MONAD_RPC_URL) return process.env.MONAD_RPC_URL;
+  return NETWORKS[network].rpc;
+}
 
 interface TipBlock {
   number: number;
@@ -28,12 +31,21 @@ interface CachedTip {
   fetchedAt: number;
 }
 
-const g = globalThis as { __monadTipCache__?: { tip: CachedTip | null; inflight: Promise<TipBlock> | null } };
-if (!g.__monadTipCache__) g.__monadTipCache__ = { tip: null, inflight: null };
-const S = g.__monadTipCache__;
+interface PerNetworkState {
+  tip: CachedTip | null;
+  inflight: Promise<TipBlock> | null;
+}
 
-async function fetchTipFresh(): Promise<TipBlock> {
-  const res = await fetch(RPC_URL, {
+const g = globalThis as { __monadTipCache__?: Map<NetworkId, PerNetworkState> };
+if (!g.__monadTipCache__) g.__monadTipCache__ = new Map();
+function stateFor(network: NetworkId): PerNetworkState {
+  let s = g.__monadTipCache__!.get(network);
+  if (!s) { s = { tip: null, inflight: null }; g.__monadTipCache__!.set(network, s); }
+  return s;
+}
+
+async function fetchTipFresh(network: NetworkId): Promise<TipBlock> {
+  const res = await fetch(rpcUrlFor(network), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -59,11 +71,13 @@ async function fetchTipFresh(): Promise<TipBlock> {
 }
 
 /**
- * Returns the current tip block. Callers are deduplicated: if a fetch is in
- * flight when called, we await the in-flight promise instead of starting a
- * second identical request.
+ * Returns the current tip block. Callers are deduplicated per-network:
+ * if a fetch is in flight, we await the in-flight promise instead of
+ * starting a second identical request. State is keyed by network so
+ * testnet and mainnet caches don't clobber each other.
  */
-export async function getTip(): Promise<TipBlock> {
+export async function getTip(network: NetworkId = 'testnet'): Promise<TipBlock> {
+  const S = stateFor(network);
   const now = Date.now();
   if (S.tip && now - S.tip.fetchedAt < TIP_TTL_MS) {
     return S.tip.data;
@@ -71,7 +85,7 @@ export async function getTip(): Promise<TipBlock> {
   if (S.inflight) {
     return S.inflight;
   }
-  const p = fetchTipFresh()
+  const p = fetchTipFresh(network)
     .then(data => {
       S.tip = { data, fetchedAt: Date.now() };
       return data;
@@ -84,7 +98,7 @@ export async function getTip(): Promise<TipBlock> {
 /**
  * Convenience for callers that only want the block number.
  */
-export async function getTipNumber(): Promise<number> {
-  const t = await getTip();
+export async function getTipNumber(network: NetworkId = 'testnet'): Promise<number> {
+  const t = await getTip(network);
   return t.number;
 }

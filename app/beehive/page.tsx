@@ -124,14 +124,22 @@ export default function BeeHivePage() {
                 </div>
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-end' }}>
-                {isHealthy ? (
-                  <span className="badge-green" style={{ fontSize: 11 }}>● NODE HEALTHY</span>
+                {network === 'testnet' ? (
+                  <>
+                    {isHealthy ? (
+                      <span className="badge-green" style={{ fontSize: 11 }}>● NODE HEALTHY</span>
+                    ) : (
+                      <span className="badge-red" style={{ fontSize: 11 }}>● NODE STALE</span>
+                    )}
+                    {data && (
+                      <span style={{ fontSize: 10, color: 'var(--text-muted)', fontFamily: 'DM Mono, monospace' }}>
+                        last heartbeat {fmtAge(data.lastSeenMs)}
+                      </span>
+                    )}
+                  </>
                 ) : (
-                  <span className="badge-red" style={{ fontSize: 11 }}>● NODE STALE</span>
-                )}
-                {data && (
-                  <span style={{ fontSize: 10, color: 'var(--text-muted)', fontFamily: 'DM Mono, monospace' }}>
-                    last heartbeat {fmtAge(data.lastSeenMs)}
+                  <span style={{ fontSize: 11, padding: '4px 10px', borderRadius: 4, background: 'rgba(232,160,32,0.1)', color: '#E8A020', border: '1px solid rgba(232,160,32,0.3)' }}>
+                    MAINNET — COMING SOON
                   </span>
                 )}
               </div>
@@ -139,7 +147,7 @@ export default function BeeHivePage() {
           </div>
 
           {/* STATUS BANNER */}
-          {data && !data.configured.validatorAddress && (
+          {network === 'testnet' && data && !data.configured.validatorAddress && (
             <div style={{
               padding: '14px 20px', marginBottom: 16,
               background: 'rgba(232,160,32,0.08)',
@@ -156,43 +164,58 @@ export default function BeeHivePage() {
             </div>
           )}
 
-          {/* LIVE INFRA STATS */}
-          <div style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))',
-            gap: 12, marginBottom: 20,
-          }}>
-            <Stat label="Client version" value={data?.clientVersion ?? '—'} accent />
-            <Stat
-              label="Our block height"
-              value={data?.ourBlockHeight?.toLocaleString() ?? '—'}
-              sub={data && netStats
-                ? (isInSync ? '✓ in sync' : `Δ ${heightDelta} vs network`)
-                : undefined}
-              accent={isInSync}
-              danger={!!data && !isInSync}
-            />
-            <Stat
-              label="Active peers"
-              value={data ? `${data.peers.active}` : '—'}
-              sub={data ? `${data.peers.upstreamValidators} upstream validators` : undefined}
-            />
-            <Stat
-              label="Blocks committed"
-              value={data?.commits.totalBlocks.toLocaleString() ?? '—'}
-              sub="lifetime counter"
-            />
-            <Stat
-              label="TXs committed"
-              value={data?.commits.totalTxs.toLocaleString() ?? '—'}
-              sub="lifetime counter"
-            />
-            <Stat
-              label="Commission"
-              value={data?.configured.validatorAddress ? `${data.configured.commissionPct}%` : 'TBD'}
-              sub={data?.configured.validatorAddress ? 'set on-chain' : 'set at activation'}
-            />
-          </div>
+          {/* LIVE INFRA STATS — testnet only (we don't run a mainnet node yet) */}
+          {network === 'testnet' ? (
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))',
+              gap: 12, marginBottom: 20,
+            }}>
+              <Stat label="Client version" value={data?.clientVersion ?? '—'} accent />
+              <Stat
+                label="Our block height"
+                value={data?.ourBlockHeight?.toLocaleString() ?? '—'}
+                sub={data && netStats
+                  ? (isInSync ? '✓ in sync' : `Δ ${heightDelta} vs network`)
+                  : undefined}
+                accent={isInSync}
+                danger={!!data && !isInSync}
+              />
+              <Stat
+                label="Active peers"
+                value={data ? `${data.peers.active}` : '—'}
+                sub={data ? `${data.peers.upstreamValidators} upstream validators` : undefined}
+              />
+              <Stat
+                label="Blocks committed"
+                value={data?.commits.totalBlocks.toLocaleString() ?? '—'}
+                sub="lifetime counter"
+              />
+              <Stat
+                label="TXs committed"
+                value={data?.commits.totalTxs.toLocaleString() ?? '—'}
+                sub="lifetime counter"
+              />
+              <Stat
+                label="Commission"
+                value={data?.configured.validatorAddress ? `${data.configured.commissionPct}%` : 'TBD'}
+                sub={data?.configured.validatorAddress ? 'set on-chain' : 'set at activation'}
+              />
+            </div>
+          ) : (
+            <div style={{
+              padding: '16px 20px', marginBottom: 20,
+              background: 'rgba(232,160,32,0.05)',
+              border: '1px dashed rgba(232,160,32,0.25)',
+              borderRadius: 8, fontSize: 12, color: 'var(--text-muted)',
+              lineHeight: 1.5,
+            }}>
+              <strong style={{ color: '#E8A020', letterSpacing: '0.05em' }}>BeeHive operates the testnet validator.</strong>
+              {' '}Mainnet validator is on the roadmap — once active, the same live infra metrics
+              (client version, peers, block height, lifetime commits, commission) will appear here.
+              Switch to <strong>Testnet</strong> for the current live state.
+            </div>
+          )}
 
           {/* TWO COLUMN: Why us · Delegate CTA */}
           <div style={{

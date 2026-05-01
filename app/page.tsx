@@ -19,6 +19,7 @@ import HealthBadge from '@/components/HealthBadge';
 import EpochCard from '@/components/EpochCard';
 import ParallelismPanel from '@/components/ParallelismPanel';
 import TopContractsTable from '@/components/TopContractsTable';
+import MainnetSoonCard from '@/components/MainnetSoonCard';
 import { NETWORKS } from '@/lib/networks';
 import { useNetwork } from '@/lib/useNetwork';
 
@@ -287,23 +288,40 @@ export default function Home() {
             />
           </div>
 
-          {/* Parallel execution panel — Monad-specific retry_pct + exec breakdown */}
-          <ParallelismPanel range={range} />
-
-          {/* Top contracts by retry rate — parallelism-conflict hotspots */}
-          <TopContractsTable network={network} />
-
-          {/* Chain metrics chart (TPS / Gas / Block utilization) */}
-          <ChainChart
-            mode={chartMode}
-            onModeChange={setChartMode}
-            range={range}
-            onRangeChange={setRange}
-            points={historyPoints}
-            currentTps={stats?.tps ?? null}
-            currentGas={stats?.gasPrice ?? null}
-            currentUtil={stats?.avgGasUtilization ?? null}
-          />
+          {/* Testnet-only widgets — sourced from our validator's Loki / WS ring /
+              InfluxDB. Mainnet has no equivalent yet (we don't run a mainnet
+              node). Show coming-soon placeholders instead of leaking testnet data. */}
+          {network === 'testnet' ? (
+            <>
+              <ParallelismPanel range={range} />
+              <TopContractsTable network={network} />
+              <ChainChart
+                mode={chartMode}
+                onModeChange={setChartMode}
+                range={range}
+                onRangeChange={setRange}
+                points={historyPoints}
+                currentTps={stats?.tps ?? null}
+                currentGas={stats?.gasPrice ?? null}
+                currentUtil={stats?.avgGasUtilization ?? null}
+              />
+            </>
+          ) : (
+            <>
+              <MainnetSoonCard
+                title="PARALLEL EXECUTION"
+                description="retry_pct + per-block exec breakdown require Loki access to monad-execution __exec_block log lines from a node we operate. We'll enable this once we run a mainnet validator."
+              />
+              <MainnetSoonCard
+                title="TOP CONTRACTS BY RETRY RATE"
+                description="Same data dependency as parallel execution — needs our validator's Loki + WS ring buffer."
+              />
+              <MainnetSoonCard
+                title="CHAIN METRICS HISTORY"
+                description="TPS / Gas / Block utilization charts read from InfluxDB monad_chain measurement, populated by a 15s poller from our validator. Live now-stats above use the public mainnet RPC."
+              />
+            </>
+          )}
 
 
           {/* Tables — full-width stacked */}

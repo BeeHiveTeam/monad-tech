@@ -8,6 +8,7 @@ import TabNav from '@/components/TabNav';
 import Pagination from '@/components/Pagination';
 import { NETWORKS } from '@/lib/networks';
 import { useNetwork } from '@/lib/useNetwork';
+import MainnetSoonCard from '@/components/MainnetSoonCard';
 
 type Health = 'active' | 'slow' | 'missing';
 type SortKey = 'score' | 'rank' | 'health' | 'uptime' | 'blocks' | 'share' | 'txs' | 'age' | 'stake' | 'commission';
@@ -305,6 +306,29 @@ export default function ValidatorsPage() {
     color: sortKey === key ? 'var(--gold)' : 'var(--text-muted)',
     transition: 'color 0.15s',
   });
+
+  // On mainnet, the staking precompile is currently empty (Monad mainnet
+  // hasn't activated on-chain validator registration yet). The list-API
+  // returns 0 registered/active so the page would otherwise show the
+  // "warming" / "no validators" state forever — confusing. Show an
+  // explicit "coming soon" placeholder instead.
+  if (network === 'mainnet') {
+    return (
+      <>
+        <HexBg />
+        <div style={{ position: 'relative', zIndex: 1, minHeight: '100vh' }}>
+          <SiteHeader network={network} onNetworkChange={setNetwork} liveState="live" lastUpdate={null} />
+          <main className="site-main">
+            <TabNav />
+            <MainnetSoonCard
+              title="VALIDATORS"
+              description="Monad mainnet hasn't activated the staking precompile yet — `getValidator(id)` returns empty for all ids. As soon as on-chain validator registration goes live, this view will populate automatically (the underlying logic already supports mainnet)."
+            />
+          </main>
+        </div>
+      </>
+    );
+  }
 
   return (
     <>

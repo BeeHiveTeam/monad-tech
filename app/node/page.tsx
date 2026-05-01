@@ -5,6 +5,7 @@ import SiteHeader from '@/components/SiteHeader';
 import TabNav from '@/components/TabNav';
 import NodeVersionCheck from '@/components/NodeVersionCheck';
 import { useNetwork } from '@/lib/useNetwork';
+import MainnetSoonCard from '@/components/MainnetSoonCard';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, Brush, ReferenceLine, Cell,
@@ -297,6 +298,24 @@ export default function NodePage() {
         ? { label: 'SYNCED', sub: 'following tip', color: '#4CAF6E' }
         : { label: 'SYNCING', sub: `${fmtNum(data.node.block.lagBlocks)} behind`, color: '#C9A84C' }
     : null;
+
+  if (network === 'mainnet') {
+    return (
+      <>
+        <HexBg />
+        <div style={{ position: 'relative', zIndex: 1, minHeight: '100vh' }}>
+          <SiteHeader network={network} onNetworkChange={setNetwork} liveState="live" lastUpdate={null} />
+          <main className="site-main">
+            <TabNav />
+            <MainnetSoonCard
+              title="VALIDATOR NODE"
+              description="This page renders the live state of our own Monad validator (peer count, sync, executor metrics, log feed). Mainnet view will activate once we run a mainnet node."
+            />
+          </main>
+        </div>
+      </>
+    );
+  }
 
   return (
     <>
