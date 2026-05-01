@@ -14,6 +14,7 @@ const TABS: Tab[] = [
   { label: 'Validators', href: '/validators' },
   { label: 'Network Health', href: '/network' },
   { label: 'Incidents', href: '/incidents' },
+  { label: 'RPCs', href: '/tools/rpcs' },
   { label: 'BeeHive', href: '/beehive', badge: 'OPERATOR' },
 ];
 
