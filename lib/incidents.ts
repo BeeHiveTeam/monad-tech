@@ -58,16 +58,36 @@ export async function collectReorgs(sinceMs: number): Promise<Incident[]> {
   const events = persisted ?? getReorgState().events.filter(e => e.ts >= sinceMs);
   return events
     .filter(e => e.ts >= sinceMs)
-    .map(e => ({
-      id: `reorg-${e.blockNumber}-${e.ts}`,
-      ts: e.ts,
-      severity: (e.depth >= 2 ? 'critical' : 'warn') as Severity,
-      type: 'reorg' as const,
-      title: `Reorg at block ${e.blockNumber} · depth ${e.depth}`,
-      detail: `Chain rewrite: ${e.oldHash.slice(0, 12)}… → ${e.newHash.slice(0, 12)}…`,
-      blockNumber: e.blockNumber,
-      meta: { depth: e.depth, oldHash: e.oldHash, newHash: e.newHash },
-    }));
+    .map(e => {
+      // Build a compact title with enriched context when available.
+      // Both forms render in the same column, just with more or less detail.
+      const parts = [`block ${e.blockNumber}`, `depth ${e.depth}`];
+      if (e.newTxCount !== undefined) parts.push(`${e.newTxCount} tx`);
+      if (e.detectionLagSec !== undefined) parts.push(`detected +${e.detectionLagSec}s`);
+      const title = `Reorg at ${parts.join(' · ')}`;
+      const detailParts = [
+        `Chain rewrite: ${e.oldHash.slice(0, 12)}… → ${e.newHash.slice(0, 12)}…`,
+      ];
+      if (e.newMiner) {
+        detailParts.push(`Replacement miner: ${e.newMiner}`);
+      }
+      return {
+        id: `reorg-${e.blockNumber}-${e.ts}`,
+        ts: e.ts,
+        severity: (e.depth >= 2 ? 'critical' : 'warn') as Severity,
+        type: 'reorg' as const,
+        title,
+        detail: detailParts.join('. '),
+        blockNumber: e.blockNumber,
+        address: e.newMiner,    // makes the miner clickable in IncidentTimeline
+        meta: {
+          depth: e.depth,
+          oldHash: e.oldHash, newHash: e.newHash,
+          newMiner: e.newMiner, newTxCount: e.newTxCount,
+          blockTs: e.blockTs, detectionLagSec: e.detectionLagSec,
+        },
+      };
+    });
 }
 
 export async function collectValidatorSetChanges(sinceMs: number): Promise<Incident[]> {
