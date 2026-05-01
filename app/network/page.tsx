@@ -4,6 +4,7 @@ import HexBg from '@/components/HexBg';
 import SiteHeader from '@/components/SiteHeader';
 import TabNav from '@/components/TabNav';
 import { useNetwork } from '@/lib/useNetwork';
+import MainnetSoonCard from '@/components/MainnetSoonCard';
 
 interface NakamotoEntry { n: number; cumPct: number }
 interface TopValidator { address: string; moniker: string | null; stakeMon: number; sharePct: number }
@@ -27,7 +28,10 @@ interface NetworkHealth {
     note: string;
   };
   reorgs: {
-    recent: Array<{ ts: number; blockNumber: number; oldHash: string; newHash: string; depth: number }>;
+    recent: Array<{
+      ts: number; blockNumber: number; oldHash: string; newHash: string; depth: number;
+      newMiner?: string; newTxCount?: number; blockTs?: number; detectionLagSec?: number;
+    }>;
     totalDetected: number;
     trackedBlocks: number;
     windowStart: number | null;
@@ -96,6 +100,24 @@ export default function NetworkPage() {
     return () => { cancelled = true; clearInterval(t); };
   }, []);
 
+  if (network === 'mainnet') {
+    return (
+      <>
+        <HexBg />
+        <div style={{ position: 'relative', zIndex: 1, minHeight: '100vh' }}>
+          <SiteHeader network={network} onNetworkChange={setNetwork} />
+          <main className="site-main">
+            <TabNav />
+            <MainnetSoonCard
+              title="NETWORK HEALTH"
+              description="Reorg detector, peer geo, validator-set churn, and decentralization metrics are computed from our own validator's Prometheus + journald via Loki. We'll bring this online for mainnet once we run a mainnet validator."
+            />
+          </main>
+        </div>
+      </>
+    );
+  }
+
   return (
     <>
       <HexBg />
@@ -113,6 +135,7 @@ export default function NetworkPage() {
             Data is collected from our own node: validator registry, RPC, journald via Loki.
           </div>
         </div>
+
 
         {err && !d && (
           <div className="card" style={{ padding: '20px 24px', color: '#E05252', fontSize: 13 }}>
@@ -185,7 +208,7 @@ export default function NetworkPage() {
             {/* Reorgs */}
             <Section
               title="REORGS"
-              subtitle="Detected by comparing hashes at tip/tip-1/tip-2 every 2s. Tracking window starts at service restart."
+              subtitle="Detected by comparing hashes at tip/tip-1/tip-2 every 4s. In-memory ring (since restart) merged with persisted history from InfluxDB (last 7 days)."
             >
               <div style={{ display: 'flex', gap: 32, marginBottom: 14, flexWrap: 'wrap' }}>
                 <div>
@@ -204,15 +227,46 @@ export default function NetworkPage() {
                   No reorgs detected in this window — chain is stable.
                 </div>
               ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                   {d.reorgs.recent.map((r, i) => (
-                    <div key={i} className="row-reorg">
-                      <span className="col-time" style={{ color: 'var(--text-muted)' }}>{fmtTime(r.ts)}</span>
-                      <span style={{ color: '#E05252' }}>block {r.blockNumber}</span>
-                      <span style={{ color: 'var(--gold)', textAlign: 'right' }}>depth {r.depth}</span>
-                      <span className="col-hash" style={{ color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
-                        {r.oldHash.slice(0, 12)}… → {r.newHash.slice(0, 12)}…
-                      </span>
+                    <div key={i} style={{
+                      padding: '8px 10px',
+                      border: '1px solid rgba(201,168,76,0.06)',
+                      borderLeft: '3px solid #E05252',
+                      borderRadius: 4,
+                      background: 'rgba(224,82,82,0.02)',
+                      fontFamily: 'DM Mono, monospace', fontSize: 11,
+                      lineHeight: 1.6,
+                    }}>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'baseline' }}>
+                        <span style={{ color: 'var(--text-muted)' }}>{fmtTime(r.ts)}</span>
+                        <a
+                          href={`/block/${r.blockNumber}`}
+                          style={{ color: '#E05252', textDecoration: 'none', fontWeight: 500 }}
+                        >
+                          block {r.blockNumber.toLocaleString()}
+                        </a>
+                        <span style={{ color: 'var(--gold)' }}>depth {r.depth}</span>
+                        {r.newTxCount !== undefined && (
+                          <span style={{ color: 'var(--text-muted)' }}>{r.newTxCount} tx</span>
+                        )}
+                        {r.detectionLagSec !== undefined && (
+                          <span style={{ color: 'var(--text-muted)', fontSize: 10 }}>
+                            detected +{r.detectionLagSec}s
+                          </span>
+                        )}
+                      </div>
+                      {r.newMiner && (
+                        <div style={{ marginTop: 2, color: 'var(--text-muted)', fontSize: 10 }}>
+                          replacement miner:{' '}
+                          <a href={`/address/${r.newMiner}`} style={{ color: 'var(--gold-dim)', textDecoration: 'none' }}>
+                            {r.newMiner.slice(0, 14)}…{r.newMiner.slice(-6)}
+                          </a>
+                        </div>
+                      )}
+                      <div style={{ marginTop: 2, color: 'var(--text-muted)', fontSize: 10, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {r.oldHash.slice(0, 14)}… → {r.newHash.slice(0, 14)}…
+                      </div>
                     </div>
                   ))}
                 </div>

@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import {
   getReorgState, getClientVersion, getGeoSummary, getSetChanges,
+  fetchReorgsFromInflux,
 } from '@/lib/networkHealth';
 
 export const dynamic = 'force-dynamic';
@@ -67,6 +68,19 @@ export async function GET() {
   const geo = getGeoSummary();
   const setChanges = getSetChanges();
 
+  // Merge in-memory reorgs with InfluxDB history. Detector ring resets on
+  // PM2 restart so without this the page would render empty for the first
+  // few minutes after every deploy. InfluxDB has been receiving every
+  // detected reorg since the dual-write was added, so we can pull a wide
+  // window cheaply (cardinality is low — typical testnet has <5 reorgs/day).
+  const persistedReorgs = (await fetchReorgsFromInflux(7 * 86400)) ?? [];
+  const seen = new Set(reorg.events.map(e => `${e.ts}-${e.blockNumber}`));
+  const merged = [
+    ...reorg.events,
+    ...persistedReorgs.filter(e => !seen.has(`${e.ts}-${e.blockNumber}`)),
+  ].sort((a, b) => b.ts - a.ts).slice(0, 50);
+  const totalDetectedAllTime = persistedReorgs.length + reorg.events.filter(e => !persistedReorgs.some(p => p.ts === e.ts && p.blockNumber === e.blockNumber)).length;
+
   return NextResponse.json({
     fetchedAt: Date.now(),
     decentralization: {
@@ -93,10 +107,12 @@ export async function GET() {
       note: '"installed" is our validator\'s actually running binary (scraped from otelcol metrics). "rpc" is the public gateway — may differ. "latest" is the GitHub release.',
     },
     reorgs: {
-      recent: reorg.events,
-      totalDetected: reorg.totalDetected,
+      recent: merged,                     // up to 50, newest first, in-memory ∪ InfluxDB
+      totalDetected: totalDetectedAllTime,
       trackedBlocks: reorg.trackedBlocks,
-      windowStart: reorg.windowStart,
+      windowStart: merged.length ? merged[merged.length - 1].ts : null,
+      historyWindowDays: 7,
+      sourceNote: 'In-memory ring (since service restart) merged with persisted history from InfluxDB (last 7 days).',
     },
     geo: geo ?? {
       fetchedAt: null,

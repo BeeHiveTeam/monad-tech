@@ -30,12 +30,17 @@ function influxEscapeStringField(v: string): string {
 }
 
 async function writeReorgToInflux(e: ReorgEvent): Promise<void> {
-  const line = `monad_reorgs,network=testnet `
-    + `block=${e.blockNumber}i,depth=${e.depth}i,`
-    + `old_hash="${influxEscapeStringField(e.oldHash)}",`
-    + `new_hash="${influxEscapeStringField(e.newHash)}" `
-    + `${e.ts}`;
-  await influxWrite(line);
+  const fields = [
+    `block=${e.blockNumber}i`,
+    `depth=${e.depth}i`,
+    `old_hash="${influxEscapeStringField(e.oldHash)}"`,
+    `new_hash="${influxEscapeStringField(e.newHash)}"`,
+  ];
+  if (e.newMiner) fields.push(`new_miner="${influxEscapeStringField(e.newMiner)}"`);
+  if (e.newTxCount !== undefined) fields.push(`new_tx_count=${e.newTxCount}i`);
+  if (e.blockTs !== undefined) fields.push(`block_ts=${e.blockTs}i`);
+  if (e.detectionLagSec !== undefined) fields.push(`detection_lag_sec=${e.detectionLagSec}i`);
+  await influxWrite(`monad_reorgs,network=testnet ${fields.join(',')} ${e.ts}`);
 }
 
 async function writeSetChangeToInflux(e: SetChangeEvent): Promise<void> {
@@ -55,7 +60,7 @@ async function writeSetChangeToInflux(e: SetChangeEvent): Promise<void> {
  */
 export async function fetchReorgsFromInflux(windowSeconds: number): Promise<ReorgEvent[] | null> {
   try {
-    const q = `SELECT block,depth,old_hash,new_hash FROM monad_reorgs `
+    const q = `SELECT block,depth,old_hash,new_hash,new_miner,new_tx_count,block_ts,detection_lag_sec FROM monad_reorgs `
       + `WHERE network='testnet' AND time > now()-${windowSeconds}s ORDER BY time ASC`;
     const res = await fetch(
       `${INFLUX_URL}/query?db=${INFLUX_DB}&q=${encodeURIComponent(q)}&epoch=ms`,
@@ -67,13 +72,34 @@ export async function fetchReorgsFromInflux(windowSeconds: number): Promise<Reor
     if (!s?.values?.length) return [];
     const idx: Record<string, number> = {};
     s.columns.forEach((c, i) => { idx[c] = i; });
-    return s.values.map(row => ({
-      ts: Number(row[idx.time]),
-      blockNumber: Number(row[idx.block]),
-      depth: Number(row[idx.depth]),
-      oldHash: String(row[idx.old_hash] ?? ''),
-      newHash: String(row[idx.new_hash] ?? ''),
-    }));
+    return s.values.map(row => {
+      const num = (k: string): number | undefined => {
+        const i = idx[k];
+        if (i === undefined) return undefined;
+        const v = row[i];
+        if (v === null || v === undefined) return undefined;
+        const n = Number(v);
+        return Number.isFinite(n) ? n : undefined;
+      };
+      const str = (k: string): string | undefined => {
+        const i = idx[k];
+        if (i === undefined) return undefined;
+        const v = row[i];
+        if (v === null || v === undefined || v === '') return undefined;
+        return String(v);
+      };
+      return {
+        ts: Number(row[idx.time]),
+        blockNumber: Number(row[idx.block]),
+        depth: Number(row[idx.depth]),
+        oldHash: String(row[idx.old_hash] ?? ''),
+        newHash: String(row[idx.new_hash] ?? ''),
+        newMiner: str('new_miner'),
+        newTxCount: num('new_tx_count'),
+        blockTs: num('block_ts'),
+        detectionLagSec: num('detection_lag_sec'),
+      };
+    });
   } catch { return null; }
 }
 
@@ -111,7 +137,20 @@ export async function fetchSetChangesFromInflux(windowSeconds: number): Promise<
 }
 
 export interface ReorgEvent {
-  ts: number; blockNumber: number; oldHash: string; newHash: string; depth: number;
+  ts: number;                   // detected at (ms)
+  blockNumber: number;
+  oldHash: string;              // hash of replaced block (orphaned)
+  newHash: string;              // hash of replacement (canonical)
+  depth: number;                // tip - blockNumber at detection time
+
+  // Optional enrichment of the NEW (canonical) block. Old block fields would
+  // require a per-event eth_getBlockByHash on an orphaned hash — many RPCs
+  // don't keep orphan blocks queryable, so we skip it. Even just knowing
+  // who proposed the replacement and how many tx it included is useful.
+  newMiner?: string;            // block.miner of the canonical replacement
+  newTxCount?: number;          // tx count in canonical replacement
+  blockTs?: number;             // block.timestamp (sec) — when block was actually produced
+  detectionLagSec?: number;     // (ts/1000) - blockTs — how late we noticed
 }
 interface BlockRecord { number: number; hash: string; ts: number; }
 export interface GeoSummary {
@@ -182,6 +221,8 @@ interface RpcBlock {
   hash: string;
   parentHash: string;
   timestamp: string;
+  miner?: string;
+  transactions?: string[];   // tx hashes when full=false
 }
 
 export async function tickReorgDetector(): Promise<void> {
@@ -234,9 +275,19 @@ export async function tickReorgDetector(): Promise<void> {
         continue;
       }
       if (blk.hash !== existing.hash) {
+        const blockTs = parseInt(blk.timestamp, 16);
+        const nowMs = Date.now();
         const event: ReorgEvent = {
-          ts: Date.now(), blockNumber: n,
+          ts: nowMs, blockNumber: n,
           oldHash: existing.hash, newHash: blk.hash, depth: tip.number - n,
+          // Enrich with what we already have in the response. block.miner
+          // here is the proposer's `beneficiary` (set in node.toml) — see
+          // lib/beneficiaryMap. block.transactions with full=false returns
+          // tx hashes (array of strings) so .length gives count.
+          newMiner: typeof blk.miner === 'string' ? blk.miner.toLowerCase() : undefined,
+          newTxCount: Array.isArray(blk.transactions) ? blk.transactions.length : undefined,
+          blockTs,
+          detectionLagSec: blockTs > 0 ? Math.max(0, Math.round(nowMs / 1000) - blockTs) : undefined,
         };
         S.reorgEvents.push(event);
         if (S.reorgEvents.length > REORG_HISTORY_SIZE) S.reorgEvents.shift();
