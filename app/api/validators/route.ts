@@ -5,6 +5,7 @@ import { getMoniker, getValidatorInfo } from '@/lib/validator-monikers';
 import { ensureRegistryLoaded, getRegistryEntries, getConsensusIds } from '@/lib/validator-registry';
 import { setBlockCache } from '@/lib/block-cache';
 import { getMinerAggregate, getAggregateState } from '@/lib/wsBlockStream';
+import { getValidatorIdForBlock, recordBeneficiary, getBeneficiaryForValidator } from '@/lib/beneficiaryMap';
 
 export const dynamic = 'force-dynamic';
 
@@ -49,6 +50,13 @@ async function computeValidators(network: NetworkId) {
   const blocks = await getLatestBlocksBatched(network, SAMPLE_BLOCKS, false, 20, 200);
   setBlockCache(network, blocks as Parameters<typeof setBlockCache>[1]);
 
+  // Build a quick lookup from validatorId → authAddress so we can attribute
+  // blocks to their producer regardless of beneficiary config.
+  const idToAuth = new Map<number, string>();
+  for (const e of getRegistryEntries()) {
+    if (e.id) idToAuth.set(e.id, e.authAddress.toLowerCase());
+  }
+
   const stats = new Map<string, {
     address: string;
     blocksProduced: number;
@@ -59,6 +67,11 @@ async function computeValidators(network: NetworkId) {
     firstBlockTs: number;
   }>();
 
+  // Attribution: for each block in the sample, look up its producer via the
+  // ValidatorRewarded event scanner (lib/beneficiaryMap.ts). This works even
+  // when the operator's beneficiary != authAddress (rewards wallet) or = 0x0
+  // (e.g. shadowoftime). Falls back to block.miner only when the rewards
+  // event hasn't been observed yet (cold-start window or scanner lagging).
   for (const block of blocks as {
     miner: string;
     number: string;
@@ -66,10 +79,26 @@ async function computeValidators(network: NetworkId) {
     transactions?: unknown[];
   }[]) {
     if (!block?.miner) continue;
-    const addr = block.miner.toLowerCase();
-    if (addr === '0x0000000000000000000000000000000000000000') continue;
-    const entry = stats.get(addr) ?? {
-      address: addr,
+    const blockNum = parseInt(block.number, 16);
+    const blockTs = parseInt(block.timestamp, 16);
+
+    // Resolve producer authAddress via reward event → validatorId → registry.
+    let attributionAddr: string | null = null;
+    const validatorId = getValidatorIdForBlock(blockNum);
+    if (validatorId !== null) {
+      const auth = idToAuth.get(validatorId);
+      if (auth) attributionAddr = auth;
+      // Record the beneficiary observation for diagnostic exposure.
+      if (block.miner) recordBeneficiary(validatorId, block.miner);
+    }
+    if (!attributionAddr) {
+      const m = block.miner.toLowerCase();
+      if (m === '0x0000000000000000000000000000000000000000') continue;
+      attributionAddr = m;
+    }
+
+    const entry = stats.get(attributionAddr) ?? {
+      address: attributionAddr,
       blocksProduced: 0,
       totalTxs: 0,
       lastBlockNumber: 0,
@@ -79,8 +108,6 @@ async function computeValidators(network: NetworkId) {
     };
     entry.blocksProduced++;
     entry.totalTxs += Array.isArray(block.transactions) ? block.transactions.length : 0;
-    const blockNum = parseInt(block.number, 16);
-    const blockTs = parseInt(block.timestamp, 16);
     if (blockNum > entry.lastBlockNumber) {
       entry.lastBlockNumber = blockNum;
       entry.lastBlockTs = blockTs;
@@ -89,7 +116,7 @@ async function computeValidators(network: NetworkId) {
       entry.firstBlockNumber = blockNum;
       entry.firstBlockTs = blockTs;
     }
-    stats.set(addr, entry);
+    stats.set(attributionAddr, entry);
   }
 
   const nowSec = Math.floor(Date.now() / 1000);
@@ -247,18 +274,22 @@ async function computeValidators(network: NetworkId) {
       }
 
       const agg = aggregateMap.get(v.address);
+      const benef = info?.validatorId ? getBeneficiaryForValidator(info.validatorId) : null;
 
       return {
         ...v,
         moniker: info?.moniker ?? null,
         stakeMon,
         commissionPct: info?.commissionPct ?? null,
-        // `registered` = the miner address matches an on-chain authAddress
-        // in the staking precompile. Non-matched block producers are active
-        // operators with separate signing keys; their stake is real but we
-        // can't resolve it without a miner→validator-id lookup.
+        // `registered` — entry exists in the on-chain staking precompile
+        // registry (matched via authAddress lookup, possibly via the
+        // beneficiaryMap if block.miner != authAddress).
         registered: info != null,
         isActiveSet,
+        // Beneficiary = block.miner address as set by operator in node.toml.
+        // Equal to authAddress for most validators, separate wallet for some,
+        // 0x0 for those who left it unconfigured.
+        beneficiary: benef,
         sharePct: Math.round((v.blocksProduced / blocks.length) * 1000) / 10,
         ageSeconds,
         participationPct,        // short window (high variance)
@@ -275,24 +306,32 @@ async function computeValidators(network: NetworkId) {
     .sort((a, b) => b.blocksProduced - a.blocksProduced);
 
   // Counts:
-  //   activeValidators   — those in active set (snapshotStake >= 10M MON).
-  //                        This is what to show on the hero/header — matches
-  //                        Monad's documented active set size (~200).
-  //   producersInWindow  — validators that produced at least one block in
-  //                        the sample. Always <= activeValidators (most active
-  //                        validators produce in 200s of blocks).
-  //   registeredCount    — total entries in the staking precompile (registry).
-  //                        Includes pending/inactive registered validators.
-  //   totalKnown         — union of producers + registered (current legacy
-  //                        `totalValidators`). Kept for backwards-compat.
+  //   activeValidators        — protocol-level ACTIVE_VALSET_SIZE = consensusIds.size
+  //                             (= 200 on testnet). This matches Monad's documented
+  //                             active set and what other dashboards show.
+  //   activeOperators         — distinct authAddresses in the active set. Lower
+  //                             than activeValidators when an operator runs
+  //                             multiple validator IDs sharing one authAddress
+  //                             (e.g. Category Labs has 4 IDs at 25M MON each
+  //                             under address 0xfa0345...). Use this when the
+  //                             question is "how many independent operators".
+  //   producersInWindow       — validators that produced at least one block in
+  //                             the sample. Always <= activeOperators (rows in
+  //                             the table) since the table dedups by address.
+  //   registeredCount         — total entries in the staking precompile registry.
+  //                             Includes pending/inactive registered validators.
+  //   totalKnown              — union of producers + registered (current legacy
+  //                             `totalValidators`). Kept for backwards-compat.
   const producersInWindow = validators.filter(v => v.blocksProduced > 0).length;
-  const activeValidators = validators.filter(v => v.isActiveSet).length;
+  const activeOperators = validators.filter(v => v.isActiveSet).length;
+  const activeValidators = useCanonicalSet ? consensusIds.size : activeOperators;
   const registeredCount = getRegistryEntries().length;
 
   return {
     network,
     sampleSize: blocks.length,
     activeValidators,
+    activeOperators,                                // distinct authAddresses (≤ activeValidators)
     consensusSetSize: consensusIds.size,            // canonical (0 = falling back to stake threshold)
     activeSetSource: useCanonicalSet ? 'consensus-precompile' : 'stake-threshold-fallback',
     producersInWindow,

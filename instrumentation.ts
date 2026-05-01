@@ -87,6 +87,17 @@ export async function register() {
   const { startWsBlockStream } = await import('./lib/wsBlockStream');
   setTimeout(() => { startWsBlockStream(); }, 8_000);
 
+  // Beneficiary map scanner: maps blockNumber → validatorId by reading
+  // ValidatorRewarded events from the staking precompile. Lets /api/validators
+  // attribute blocks to the correct validator regardless of the operator's
+  // chosen beneficiary (some are 0x0, some are separate wallets, etc.)
+  // First scan covers ~5000 blocks (~33 min); subsequent ticks are incremental.
+  const { tickBeneficiaryScanner } = await import('./lib/beneficiaryMap');
+  setTimeout(() => {
+    void tickBeneficiaryScanner();
+    setInterval(() => void tickBeneficiaryScanner(), 5 * 60_000);
+  }, 20_000);
+
   // Chain-stats poller: hits /api/stats every 15s so InfluxDB `monad_chain`
   // (tps, gas_gwei, block_util_pct) stays continuously populated regardless
   // of live viewer activity. Without this, /api/history has null gaps for

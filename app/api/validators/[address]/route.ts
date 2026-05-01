@@ -4,6 +4,7 @@ import { getValidatorInfo } from '@/lib/validator-monikers';
 import { ensureRegistryLoaded, getRegistryEntries, getConsensusIds } from '@/lib/validator-registry';
 import { NETWORKS } from '@/lib/networks';
 import { getBlockCache, setBlockCache } from '@/lib/block-cache';
+import { getValidatorIdForBlock, getBeneficiaryForValidator } from '@/lib/beneficiaryMap';
 
 export const dynamic = 'force-dynamic';
 
@@ -63,7 +64,21 @@ export async function GET(
     const producersInWindow = minerCounts.size;
     const expectedBlocks = producersInWindow > 0 ? totalBlocks / producersInWindow : 1;
 
-    const myBlocks = validBlocks.filter(b => b.miner.toLowerCase() === addr);
+    // Match list-API: attribute blocks to producer via ValidatorRewarded
+    // events when available, fall back to block.miner equality otherwise.
+    // This catches validators with non-authAddress beneficiaries (separate
+    // rewards wallets, 0x0, etc.) — the same pattern that made shadowoftime
+    // appear to have 0 blocks despite producing them.
+    const _info = getValidatorInfo(addr);
+    const targetValidatorId = _info?.validatorId ?? null;
+    const myBlocks = validBlocks.filter(b => {
+      const bn = parseInt(b.number, 16);
+      const vid = getValidatorIdForBlock(bn);
+      if (vid !== null && targetValidatorId !== null) {
+        return vid === targetValidatorId;
+      }
+      return b.miner.toLowerCase() === addr;
+    });
     const blocksProduced = myBlocks.length;
 
     // Time window
@@ -103,7 +118,7 @@ export async function GET(
       ? Math.round((blocksProduced / adjustedExpected) * 1000) / 10
       : 0;
 
-    const info = getValidatorInfo(addr);
+    const info = _info;
     const stakeMon = info?.stakeMon ?? null;
     const consensusIds = getConsensusIds();
     const useCanonicalSet = consensusIds.size > 0;
@@ -164,6 +179,7 @@ export async function GET(
       commissionPct: info?.commissionPct ?? null,
       registered: info != null,
       isActiveSet,
+      beneficiary: info?.validatorId ? getBeneficiaryForValidator(info.validatorId) : null,
       consensusSetSize: consensusIds.size,
       stats: {
         health,
