@@ -1,6 +1,6 @@
 # monad-tech
 
-Real-time **Monad testnet observability dashboard** — with focus on the things other explorers don't show: parallel-execution metrics, a unified incident timeline, validator health scoring, and network-wide decentralization insights.
+Real-time **Monad observability dashboard** — testnet is fully live, mainnet runs in preview against public RPCs. Focus on the things other explorers don't show: parallel-execution metrics, a unified incident timeline, validator health scoring, network-wide decentralization insights, and a curated public-RPC catalog with live latency monitor.
 
 🌐 Live: <https://monad-tech.com> · (legacy alias <https://monad-tech.bee-hive.work>)
 
@@ -24,7 +24,7 @@ Real-time **Monad testnet observability dashboard** — with focus on the things
 ### Network Health — Nakamoto coefficient, top-10 stake, peer geography
 ![Network Health](docs/screenshots/04-network-health.png)
 
-### Incident Timeline — 12 event types including 5 Monad-specific anomaly detectors
+### Incident Timeline — 13 event types including 6 Monad-specific anomaly detectors
 ![Incidents](docs/screenshots/05-incidents.png)
 
 ### BeeHive — operator landing with live infra telemetry
@@ -39,9 +39,11 @@ Block explorers like MonadScan cover the basics (blocks, txs, gas). This dashboa
 - **`retry_pct`** — share of transactions re-executed per block due to parallel-execution conflicts. Unique to Monad's OCC engine. Surfaces which contracts break parallelism.
 - **Block execution time breakdown** — `state_reset` / `tx_exec` / `commit` phases in microseconds.
 - **Top contracts by retry rate** — parallelism hotspots ranked.
-- **Unified incident timeline** — reorgs · validator churn · retry spikes · block stalls · critical logs, all in one chronological feed with persistence across restarts.
-- **Validator health score** — composite of block-production, uptime, recency, with penalty for unregistered signers.
+- **Unified incident timeline** — reorgs · validator churn · retry spikes · block stalls · critical logs · 6 Monad-specific anomaly detectors, all in one chronological feed with persistence across restarts. Reorgs are enriched with replacement miner / tx count / detection lag, and merged with a 7-day InfluxDB history so the panel never blanks out after a deploy.
+- **Validator health score** — composite of block-production, uptime, recency, with penalty for unregistered signers. Block attribution uses on-chain `ValidatorRewarded` events so operators with non-authAddress beneficiaries are still credited.
+- **On-chain delegator lists** — pulled directly from the staking precompile (`getDelegators(uint64,address)`, selector `0xa0843a26`) instead of block-scanning. Survives validator-set reshuffles and is correct on day one.
 - **Network decentralization** — Nakamoto 33/50/66 coefficients, peer geo distribution, client version tracking.
+- **Public-RPC catalog with live latency** — `/tools/rpcs` pings 19 public Monad endpoints (testnet + mainnet) every 60 s, sorts by median latency, exposes "Add to MetaMask" per network.
 
 The goal: be the single dashboard where an operator can diagnose "is my node lagging, or is the whole network halted?" and where a delegator can compare validators on dimensions that matter.
 
@@ -71,12 +73,19 @@ The goal: be the single dashboard where an operator can diagnose "is my node lag
 - Validator set changes log
 
 ### Incidents
-- Unified feed of **12 event types**:
+- Unified feed of **13 event types**:
   - **Standard**: reorg · validator_added/removed/stake_decrease · retry_spike · block_stall · critical_log
-  - **Anomaly detectors** (Monad-specific, edge-triggered): state_root_mismatch · state_sync_active · consensus_stress · vote_delay_high · tip_lag
+  - **Anomaly detectors** (Monad-specific, edge-triggered): state_root_mismatch · state_sync_active · consensus_stress · vote_delay_high · tip_lag · exec_lag
+- Reorg cards now show replacement miner (with moniker), tx count, and detection lag, and merge in-memory ring with the last 7 days from InfluxDB
 - Filter by severity (all / critical / warn / info)
 - Filter by range (1h / 6h / 12h / 24h / 7d)
 - Persistent: survives PM2 restarts (InfluxDB-backed)
+
+### Tools — public RPC catalog
+- `/tools/rpcs` — 11 mainnet + 8 testnet public endpoints from Foundation, Alchemy, Ankr, dRPC, OnFinality, Tenderly, thirdweb, bloXroute, Tatum, MonadInfra, Natsai
+- Live status: online dot, median latency over the last 5 samples, current tip block, WS support badge
+- Per-network "Add to MetaMask" button using `wallet_addEthereumChain`
+- Network switcher filters the catalog so the testnet tab only shows testnet RPCs and vice-versa
 
 ### BeeHive
 - Operator landing page with live infra telemetry
@@ -233,10 +242,19 @@ Middleware in `middleware.ts` adds in-app rate limiting (300 req / min / IP). Cl
   a registry of signing-key derivations).
 - **InfluxDB dual-source** — `/api/exec-stats` ≤ 15 min → Loki (freshest), > 15 min
   → InfluxDB (persisted). Writer polls every 30 s.
-- **Anomaly detectors persisted to InfluxDB** — 5 edge-triggered detectors
+- **Anomaly detectors persisted to InfluxDB** — 6 edge-triggered detectors
   (state_root_mismatch, state_sync_active, consensus_stress, vote_delay_high,
-  tip_lag) write to `monad_anomalies` measurement. Survives PM2 restarts so
+  tip_lag, exec_lag) write to `monad_anomalies` measurement. Survives PM2 restarts so
   the public IncidentTimeline doesn't blank out on deploys.
+- **Per-network state isolation** — `tipCache`, validator registry, and
+  moniker map are all keyed by `NetworkId` so the mainnet preview cannot
+  leak testnet data into a mainnet view (or vice versa).
+- **Mainnet preview via public RPC** — testnet talks to our own validator;
+  mainnet falls back to `https://rpc.monad.xyz`. Mainnet-only sections that
+  rely on data we cannot get from a public endpoint (parallelism, top
+  contracts, retry charts, beneficiary attribution, our infra telemetry)
+  render a "MAINNET — COMING SOON" placeholder rather than recycling
+  testnet numbers.
 
 ---
 
@@ -244,13 +262,18 @@ Middleware in `middleware.ts` adds in-app rate limiting (300 req / min / IP). Cl
 
 - [x] Tip-lag vs reference RPC — shipped as `tip_lag` anomaly detector
 - [x] Stake-weighted participation metric — shipped (short + long window)
+- [x] Validator comparison tool (pick 2-5, side-by-side) — shipped
+- [x] Per-validator delegator list — shipped via `getDelegators` precompile (selector `0xa0843a26`)
+- [x] Public-RPC catalog with live latency — shipped at `/tools/rpcs`
+- [x] Mainnet preview via public RPC — shipped (testnet stays on our validator)
+- [x] Beneficiary-based block attribution — shipped via `ValidatorRewarded` events
+- [x] Reorg history persisted across restarts — shipped via 7-day InfluxDB merge
 - [ ] Persist WS aggregator to InfluxDB so `participationLong` survives PM2 restart
 - [ ] Telegram / Discord bot for critical incidents
 - [ ] AS / ISP concentration detector → new incident type (mainnet, via Decentra)
 - [ ] Light-theme toggle
 - [ ] Public API docs (OpenAPI)
-- [ ] Validator comparison tool (pick 2-3, side-by-side)
-- [ ] Per-validator delegator list — use `getDelegators` precompile (selector `0xa0843a26`) instead of block-scanning
+- [ ] Native mainnet validator (replace public-RPC fallback once BeeHive's mainnet node is live)
 
 ---
 
