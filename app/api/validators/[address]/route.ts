@@ -1,15 +1,27 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getLatestBlocksBatched } from '@/lib/rpc';
 import { getValidatorInfo } from '@/lib/validator-monikers';
-import { ensureRegistryLoaded, getRegistryEntries, getConsensusIds } from '@/lib/validator-registry';
+import { ensureRegistryLoaded, getRegistryEntries, getConsensusIds, getChainDataById } from '@/lib/validator-registry';
 import { NETWORKS, NetworkId } from '@/lib/networks';
 import { getBlockCache, setBlockCache } from '@/lib/block-cache';
 import { getValidatorIdForBlock, getBeneficiaryForValidator } from '@/lib/beneficiaryMap';
+import { getMinerAggregate, getAggregateState } from '@/lib/wsBlockStream';
+import {
+  computeValidatorMetrics,
+  computeTotalActiveStake,
+  isInActiveSet,
+  computeValidatorScore,
+  computeAuthStake,
+} from '@/lib/validatorMetrics';
 
 export const dynamic = 'force-dynamic';
 
 const CACHE_TTL = 60_000;
 const cache = new Map<string, { ts: number; data: unknown }>();
+
+function round1(x: number): number {
+  return Math.round(x * 10) / 10;
+}
 
 export async function GET(
   req: NextRequest,
@@ -66,20 +78,30 @@ export async function GET(
     // count (~267) — it's just the distinct producers seen in the last 500
     // blocks. Renamed to make the semantic explicit.
     const producersInWindow = minerCounts.size;
-    const expectedBlocks = producersInWindow > 0 ? totalBlocks / producersInWindow : 1;
 
-    // Match list-API: attribute blocks to producer via ValidatorRewarded
-    // events when available, fall back to block.miner equality otherwise.
-    // This catches validators with non-authAddress beneficiaries (separate
-    // rewards wallets, 0x0, etc.) — the same pattern that made shadowoftime
-    // appear to have 0 blocks despite producing them.
+    // Match list-API attribution exactly: an authAddress owns ALL validator
+    // IDs registered to it (operators like Category Labs run 4+ IDs under one
+    // auth — without this rollup, DETAIL would only count one ID's blocks
+    // while LIST sums across all IDs, producing systematic divergence).
+    //
+    // CRUCIAL: source ownedValidatorIds from per-ID chainData, NOT auth-deduped
+    // registry. The moniker registry only stores ONE entry per authAddress,
+    // so reading from it would silently drop 3 of Category Labs' 4 IDs.
+    //
+    // Fall back to block.miner equality when the rewards event hasn't been
+    // observed yet — same logic as list-API. This catches validators with
+    // non-authAddress beneficiaries (separate rewards wallets, 0x0).
     const _info = getValidatorInfo(addr, network);
-    const targetValidatorId = _info?.validatorId ?? null;
+    const _chainDataForAttribution = getChainDataById(network);
+    const ownedValidatorIds = new Set<number>();
+    for (const [id, data] of _chainDataForAttribution) {
+      if (data.authAddress.toLowerCase() === addr) ownedValidatorIds.add(id);
+    }
     const myBlocks = validBlocks.filter(b => {
       const bn = parseInt(b.number, 16);
       const vid = getValidatorIdForBlock(bn);
-      if (vid !== null && targetValidatorId !== null) {
-        return vid === targetValidatorId;
+      if (vid !== null) {
+        return ownedValidatorIds.has(vid);
       }
       return b.miner.toLowerCase() === addr;
     });
@@ -90,79 +112,57 @@ export async function GET(
     const newestTs = Math.max(...timestamps);
     const oldestTs = Math.min(...timestamps);
     const windowSeconds = Math.max(1, newestTs - oldestTs);
-    const expectedGapSeconds = producersInWindow > 0 ? (windowSeconds / totalBlocks) * producersInWindow : 60;
 
     // My stats
     const myTimestamps = myBlocks.map(b => parseInt(b.timestamp, 16));
     const lastBlockTs = myTimestamps.length ? Math.max(...myTimestamps) : 0;
     const firstBlockTs = myTimestamps.length ? Math.min(...myTimestamps) : 0;
-    const nowSec = Math.floor(Date.now() / 1000);
-    // Match list-API fallback semantics. When the validator produced no blocks
-    // in the sample window, fall back to "window-span age" instead of a 999999
-    // sentinel — list-API does the same. Without this the detail page reports
-    // health=unknown and score=0 while the table reports health=slow and
-    // score=~24 for the exact same validator (e.g. validators using a separate
-    // signing key whose blocks don't match their authAddress).
-    const ageSeconds = lastBlockTs > 0
-      ? Math.max(0, newestTs - lastBlockTs)
-      : Math.max(0, nowSec - oldestTs);
     const totalTxs = myBlocks.reduce((s, b) => s + (Array.isArray(b.transactions) ? b.transactions.length : 0), 0);
-    const sharePct = totalBlocks > 0 ? Math.round((blocksProduced / totalBlocks) * 1000) / 10 : 0;
-    // Uptime relative to validator's active window — a new validator that
-    // appeared mid-sample isn't penalised for blocks it couldn't have produced.
-    const isNewInWindow = firstBlockTs > 0 && firstBlockTs > oldestTs + expectedGapSeconds * 2;
-    const activeWindowStart = isNewInWindow ? firstBlockTs : oldestTs;
-    const activeWindowSec = Math.max(
-      expectedGapSeconds * 3,
-      newestTs - activeWindowStart + expectedGapSeconds,
-    );
-    const activeRatio = windowSeconds > 0 ? Math.min(activeWindowSec / windowSeconds, 1) : 1;
-    const adjustedExpected = expectedBlocks * activeRatio;
-    const participationPct = adjustedExpected > 0
-      ? Math.round((blocksProduced / adjustedExpected) * 1000) / 10
-      : 0;
 
     const info = _info;
-    const stakeMon = info?.stakeMon ?? null;
     const consensusIds = getConsensusIds(network);
-    const useCanonicalSet = consensusIds.size > 0;
-    const isActiveSet = useCanonicalSet
-      ? (info?.validatorId != null && consensusIds.has(info.validatorId))
-      : (stakeMon ?? 0) >= 10_000_000;
+    const chainData = _chainDataForAttribution;
+    // Auth-rolled-up stake — sums across every ID this auth owns. Mirrors
+    // list-API behaviour. See computeAuthStake JSDoc for full rationale.
+    const auth = computeAuthStake(addr, chainData, consensusIds);
+    const stakeMon = auth.validatorIds.length > 0 ? auth.stakeMon : (info?.stakeMon ?? null);
+    const isActiveSet = auth.activeIds.length > 0
+      ? true
+      : isInActiveSet(info?.validatorId, stakeMon, consensusIds);
+    const totalActiveStake = computeTotalActiveStake(chainData, consensusIds);
 
-    // Stake-weighted personal expected gap — mirrors list-API logic.
-    // For active-set validators with known stake, expected inter-block gap is
-    // windowSeconds / (blocks.length × stakeShare). Falls back to global mean
-    // for non-active-set / unknown stake.
-    let totalActiveStake = 0;
-    for (const e of getRegistryEntries(network)) {
-      const inSet = useCanonicalSet
-        ? consensusIds.has(e.id)
-        : (e.stakeMon ?? 0) >= 10_000_000;
-      if (inSet) totalActiveStake += e.stakeMon ?? 0;
-    }
-    const stakeShareForGap = (isActiveSet && stakeMon != null && totalActiveStake > 0)
-      ? stakeMon / totalActiveStake
-      : 0;
-    const personalGap = stakeShareForGap > 0 && totalBlocks > 0
-      ? windowSeconds / (totalBlocks * stakeShareForGap)
-      : expectedGapSeconds;
+    // Long-window aggregator data — same source as list-API. Detail used to
+    // omit participationLong; now provides parity so external integrators
+    // can rely on a single shape.
+    const aggregateState = getAggregateState();
+    const aggForMe = getMinerAggregate().find(a => a.miner === addr);
 
-    // Health classification mirrors list-API thresholds (active/slow/missing).
-    // Zero-block validators are forced to 'missing' because ageSeconds
-    // clamps at window-span — see list-API for the full rationale.
-    let health: 'active' | 'slow' | 'missing' | 'unknown';
-    if (blocksProduced === 0) health = 'missing';
-    else if (ageSeconds < personalGap * 2) health = 'active';
-    else if (ageSeconds < personalGap * 5) health = 'slow';
-    else health = 'missing';
+    // Single source of truth — see lib/validatorMetrics.ts. Both list and
+    // detail call this exact helper with identical inputs, so participationPct
+    // can no longer drift between the two endpoints.
+    const m = computeValidatorMetrics({
+      blocksProduced,
+      firstBlockTs,
+      lastBlockTs,
+      newestTs,
+      oldestTs,
+      windowSeconds,
+      totalBlocks,
+      producersInWindow,
+      stakeMon,
+      isActiveSet,
+      totalActiveStake,
+      cumulativeBlocksObserved: aggregateState.totalBlocks,
+      cumulativeMinerBlocks: aggForMe?.blocks ?? 0,
+    });
 
-    // Score
-    const healthScore = health === 'active' ? 100 : health === 'slow' ? 40 : 0;
-    const uptimeScore = Math.min(participationPct, 100);
-    const maxAge = personalGap * 5;
-    const recencyScore = maxAge > 0 ? Math.max(0, (1 - ageSeconds / maxAge)) * 100 : 0;
-    const score = Math.round(healthScore * 0.4 + uptimeScore * 0.4 + recencyScore * 0.2);
+    const score = computeValidatorScore({
+      health: m.health,
+      participationPct: m.participationPct,
+      ageSeconds: m.ageSeconds,
+      personalGapSeconds: m.personalGapSeconds,
+      registered: info != null,
+    });
 
     // Recent blocks for this validator
     const recentBlocks = myBlocks
@@ -180,29 +180,32 @@ export async function GET(
       moniker: info?.moniker ?? null,
       info,
       stakeMon,
+      validatorIds: auth.validatorIds,
+      activeValidatorIdsCount: auth.activeIds.length,
       commissionPct: info?.commissionPct ?? null,
       registered: info != null,
       isActiveSet,
       beneficiary: info?.validatorId ? getBeneficiaryForValidator(info.validatorId) : null,
       consensusSetSize: consensusIds.size,
       stats: {
-        health,
+        health: m.health,
         score,
         blocksProduced,
         totalTxs,
-        sharePct,
-        participationPct,
-        ageSeconds,
+        sharePct: m.sharePct,
+        participationPct: m.participationPct,
+        participationLong: m.participationLong,        // parity with list-API
+        ageSeconds: m.ageSeconds,
         lastBlockTs,
         firstBlockTs,
-        isNewInWindow,
-        activeWindowSeconds: Math.round(activeWindowSec),
+        isNewInWindow: m.isNewInWindow,
+        activeWindowSeconds: Math.round(m.activeWindowSeconds),
       },
       context: {
         sampleSize: totalBlocks,
         producersInWindow,
-        expectedGapSeconds,
-        personalGapSeconds: Math.round(personalGap * 10) / 10,
+        expectedGapSeconds: round1(m.expectedGapSeconds),
+        personalGapSeconds: round1(m.personalGapSeconds),
         windowSeconds,
       },
       recentBlocks,

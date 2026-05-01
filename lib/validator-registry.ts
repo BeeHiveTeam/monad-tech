@@ -11,7 +11,7 @@ interface GithubValidatorInfo {
   x?: string;
 }
 
-interface ChainValidatorData {
+export interface ChainValidatorData {
   authAddress: string;
   /** Snapshot stake (MON) — gates active-set membership at epoch boundary. Slot 8. */
   stakeMon: number;
@@ -165,12 +165,29 @@ const CONSENSUS_SET_SELECTOR = '0xfb29b729';
 const _consensusIdsMap: Map<NetworkId, Set<number>> = new Map();
 const _consensusFetchedAtMap: Map<NetworkId, number> = new Map();
 
+// Per-network per-ID chain data. Preserves multi-validatorId-per-authAddress
+// relationships that are flattened by validator-monikers' authAddress-keyed
+// Map. Operators like Category Labs run 4 IDs under one auth: aggregating
+// participationPct without this map underestimates their effective stake by
+// 4× and produces systematically inflated %.
+const _chainByIdMap: Map<NetworkId, Map<number, ChainValidatorData>> = new Map();
+
 export function getConsensusIds(network: NetworkId = 'testnet'): Set<number> {
   return _consensusIdsMap.get(network) ?? new Set();
 }
 
 export function getConsensusFetchedAt(network: NetworkId = 'testnet'): number {
   return _consensusFetchedAtMap.get(network) ?? 0;
+}
+
+/**
+ * Per-validator-ID chain data, indexed by ID — NOT auth-deduped. Multi-ID
+ * operators have multiple entries here (one per ID). Use this for any
+ * stake-rollup or active-set computation; use getRegistryEntries for moniker
+ * / per-row UI display.
+ */
+export function getChainDataById(network: NetworkId = 'testnet'): Map<number, ChainValidatorData> {
+  return _chainByIdMap.get(network) ?? new Map();
 }
 
 async function fetchConsensusSet(rpcUrl: string): Promise<Set<number>> {
@@ -274,6 +291,7 @@ export async function ensureRegistryLoaded(rpcUrl: string, network: NetworkId = 
     ]);
     _consensusIdsMap.set(network, consensusIds);
     _consensusFetchedAtMap.set(network, Date.now());
+    _chainByIdMap.set(network, chainMap);
     const githubById = new Map<number, GithubValidatorInfo>();
     for (const g of github) githubById.set(g.id, g);
 

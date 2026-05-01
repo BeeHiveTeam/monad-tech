@@ -2,10 +2,11 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getLatestBlocksBatched } from '@/lib/rpc';
 import { NETWORKS, NetworkId } from '@/lib/networks';
 import { getMoniker, getValidatorInfo } from '@/lib/validator-monikers';
-import { ensureRegistryLoaded, getRegistryEntries, getConsensusIds } from '@/lib/validator-registry';
+import { ensureRegistryLoaded, getRegistryEntries, getConsensusIds, getChainDataById } from '@/lib/validator-registry';
 import { setBlockCache } from '@/lib/block-cache';
 import { getMinerAggregate, getAggregateState } from '@/lib/wsBlockStream';
 import { getValidatorIdForBlock, recordBeneficiary, getBeneficiaryForValidator } from '@/lib/beneficiaryMap';
+import { computeValidatorMetrics, computeTotalActiveStake, isInActiveSet, computeAuthStake } from '@/lib/validatorMetrics';
 
 export const dynamic = 'force-dynamic';
 
@@ -55,11 +56,15 @@ async function computeValidators(network: NetworkId) {
   const blocks = await getLatestBlocksBatched(network, SAMPLE_BLOCKS, false, 20, 200);
   setBlockCache(network, blocks as Parameters<typeof setBlockCache>[1]);
 
-  // Build a quick lookup from validatorId → authAddress so we can attribute
-  // blocks to their producer regardless of beneficiary config.
+  // Per-ID chain data (NOT auth-deduped registry) — used for both attribution
+  // (idToAuth lookup) and stake rollup (computeAuthStake / computeTotalActiveStake).
+  // Multi-ID operators like Category Labs have 4 IDs sharing one auth; the
+  // moniker registry collapses them into one entry, so we cannot use it as the
+  // source of truth for ID→auth mappings.
+  const chainData = getChainDataById(network);
   const idToAuth = new Map<number, string>();
-  for (const e of getRegistryEntries(network)) {
-    if (e.id) idToAuth.set(e.id, e.authAddress.toLowerCase());
+  for (const [id, data] of chainData) {
+    idToAuth.set(id, data.authAddress.toLowerCase());
   }
 
   const stats = new Map<string, {
@@ -124,7 +129,6 @@ async function computeValidators(network: NetworkId) {
     stats.set(attributionAddr, entry);
   }
 
-  const nowSec = Math.floor(Date.now() / 1000);
   const newestTs = (blocks as { timestamp: string }[])
     .reduce((m, b) => Math.max(m, parseInt(b.timestamp, 16)), 0);
   const oldestTs = (blocks as { timestamp: string }[])
@@ -133,13 +137,11 @@ async function computeValidators(network: NetworkId) {
 
   const numValidators = stats.size;
   // expectedGap is still based on producer count — this is for "is this miner
-  // late?" timing logic, not for stake-weighted fairness.
+  // late?" timing logic, not for stake-weighted fairness. computeValidatorMetrics
+  // re-derives the same value per-validator from (windowSeconds, totalBlocks,
+  // producersInWindow); this top-level value is kept for the response payload
+  // and as the fallback for low-stake / non-active-set validators.
   const expectedGap = numValidators > 0 ? (windowSeconds / blocks.length) * numValidators : 60;
-
-  // Threshold for detecting "new" validators: if their first block in the
-  // sample is more than 2 expected gaps after the window start, they likely
-  // weren't active for the whole window.
-  const NEW_DETECT_THRESHOLD = expectedGap * 2;
 
   // Seed stats map with every on-chain validator from the registry, so that
   // validators who haven't produced blocks in the sample window still appear
@@ -160,25 +162,19 @@ async function computeValidators(network: NetworkId) {
     }
   }
 
-  // Compute active-set total stake for stake-weighted participation.
-  // Active set on Monad = TOP-200 staked validators per epoch via
-  // syscallSnapshot, with minimums of 100k MON self + 10M MON total. We use
-  // getConsensusValidatorSet() as the canonical source. The earlier
-  // approximation `stakeMon >= 10M` was wrong by a few validators (didn't
-  // account for the top-200 cap, edge cases with snapshot stake just under
-  // 10M but seated by protocol). See [[validator-scoring-semantics]].
-  // Stake-weighted: a validator's expected blocks-produced is
-  // `blocks.length × (its stake / total active stake)`, NOT `blocks.length / N`.
-  const ACTIVE_STAKE_MIN = 10_000_000;  // protocol minimum, fallback only
+  // Active-set membership and total stake — see lib/validatorMetrics.ts.
+  // Active set on Monad = TOP-200 staked validators per epoch via syscallSnapshot
+  // (minimums: 100k MON self + 10M MON total). Canonical source is
+  // getConsensusValidatorSet(); stake-threshold (10M MON) is the cold-start
+  // fallback. Stake-weighting drives `participationPct` and `personalGap`.
+  //
+  // Crucially, totalActiveStake iterates per-ID chain data (NOT auth-deduped
+  // registry entries) — multi-ID operators contribute each ID's stake. The
+  // moniker registry collapses 4 Category Labs IDs into one row, but their
+  // combined active-set stake is 4× the per-ID figure.
   const consensusIds = getConsensusIds(network);
   const useCanonicalSet = consensusIds.size > 0;
-  let totalActiveStake = 0;
-  for (const info of getRegistryEntries(network)) {
-    const inSet = useCanonicalSet
-      ? consensusIds.has(info.id)
-      : (info.stakeMon ?? 0) >= ACTIVE_STAKE_MIN;
-    if (inSet) totalActiveStake += info.stakeMon ?? 0;
-  }
+  const totalActiveStake = computeTotalActiveStake(chainData, consensusIds);
 
   // Cumulative aggregate from the WebSocket stream (since process start).
   // Indexed by lowercase miner address. After 30+ minutes of runtime this
@@ -191,100 +187,46 @@ async function computeValidators(network: NetworkId) {
 
   const validators = Array.from(stats.values())
     .map(v => {
-      // `ageSeconds` = how stale is this validator's last block _relative to
-      // the newest block in our sample_ (NOT wall-clock now). This is the
-      // right reference because /api/validators background refresh can take
-      // 30-60 seconds — using wall-clock `nowSec` would penalise every
-      // validator by that refresh-duration delta even though block production
-      // was healthy at sample time. Consumers still see "live enough" if
-      // this number stays under expectedGap × 2.
-      const ageSeconds = v.lastBlockTs > 0
-        ? Math.max(0, newestTs - v.lastBlockTs)
-        : Math.max(0, nowSec - oldestTs);  // registry-only entries → window-span
-
-      // Active-window adjustment: validators that joined mid-window are
-      // not penalised for not existing in earlier blocks.
-      const isNewInWindow = v.firstBlockTs > oldestTs + NEW_DETECT_THRESHOLD;
-      const activeWindowStart = isNewInWindow ? v.firstBlockTs : oldestTs;
-      const activeWindowSec = Math.max(
-        expectedGap * 3,
-        newestTs - activeWindowStart + expectedGap,
-      );
-      const activeRatio = windowSeconds > 0 ? activeWindowSec / windowSeconds : 1;
-
       const info = getValidatorInfo(v.address, network);
-      const stakeMon = info?.stakeMon ?? null;
-      // Canonical active-set check: validator ID is in the result of
-      // getConsensusValidatorSet(). Falls back to the stake threshold only
-      // during cold-start when the precompile call hasn't completed yet.
-      const isActiveSet = useCanonicalSet
-        ? (info?.validatorId != null && consensusIds.has(info.validatorId))
-        : (stakeMon ?? 0) >= ACTIVE_STAKE_MIN;
-
-      // Stake-weighted personal expected gap. Leader election is stake-weighted
-      // within the active set, so a validator with 0.5% stake share produces
-      // ~0.5% of blocks. Their typical inter-block gap is therefore
-      // windowSeconds / (blocks.length × stakeShare), NOT the global mean.
-      // Using the global mean for thresholds caused low-stake validators to
-      // chronically appear `slow` even when producing exactly their fair share.
-      // For non-active-set validators or unknown stake, we keep the global
-      // gap — they shouldn't be in the active rotation anyway.
-      const stakeShareForGap = (isActiveSet && stakeMon != null && totalActiveStake > 0)
-        ? stakeMon / totalActiveStake
-        : 0;
-      const personalGap = stakeShareForGap > 0 && blocks.length > 0
-        ? windowSeconds / (blocks.length * stakeShareForGap)
-        : expectedGap;
-
-      let health: 'active' | 'slow' | 'missing';
-      if (v.blocksProduced === 0) {
-        // Zero blocks observed in the sample window. Without this branch the
-        // age-based classification falls back to `nowSec - oldestTs`, which
-        // is bounded by window-span (~3× expectedGap with sampleSize=500),
-        // never the 5× MISSING threshold — so every zero-block validator
-        // gets labeled 'slow', misleading delegators. Force 'missing' here
-        // regardless of active-set status; the score (healthScore=0,
-        // uptimeScore=0) is the honest signal.
-        health = 'missing';
-      } else if (ageSeconds < personalGap * 2) health = 'active';
-      else if (ageSeconds < personalGap * 5) health = 'slow';
-      else health = 'missing';
-
-      // Two participation values:
-      //   participationPct       — short-window (sample blocks). High variance
-      //                            on 500 blocks but reflects current behavior.
-      //   participationLong      — cumulative aggregate from WS stream since
-      //                            process start. Stable on hours of runtime.
-      // Both null when stake unknown or not in active set — leader election
-      // is stake-weighted within the active set; outside it the metric is
-      // meaningless.
-      let participationPct: number | null = null;
-      let participationLong: number | null = null;
-      if (isActiveSet && totalActiveStake > 0) {
-        const stakeShare = (stakeMon ?? 0) / totalActiveStake;
-        const expectedShort = blocks.length * stakeShare * Math.min(activeRatio, 1);
-        if (expectedShort > 0) {
-          participationPct = Math.round((v.blocksProduced / expectedShort) * 1000) / 10;
-        }
-        // Long-window: based on cumulative WS aggregate. Need at least
-        // ~5 expected blocks for the metric to be meaningful (otherwise
-        // null — the aggregator is too young).
-        const longBlocksObserved = aggregateState.totalBlocks;
-        const expectedLong = longBlocksObserved * stakeShare;
-        if (expectedLong >= 5) {
-          const agg = aggregateMap.get(v.address);
-          const observedLong = agg?.blocks ?? 0;
-          participationLong = Math.round((observedLong / expectedLong) * 1000) / 10;
-        }
-      }
-
+      // Auth-level stake rollup. v.address is the operator's authAddress;
+      // their effective stake is the sum across every validator ID they own.
+      // For single-ID operators this matches info.stakeMon exactly. For
+      // multi-ID operators (Category Labs has 4 IDs at 25M MON each = 100M)
+      // the rollup is what matches the rolled-up blocksProduced count.
+      const auth = computeAuthStake(v.address, chainData, consensusIds);
+      const stakeMon = auth.validatorIds.length > 0 ? auth.stakeMon : (info?.stakeMon ?? null);
+      const isActiveSet = auth.activeIds.length > 0
+        ? true
+        : isInActiveSet(info?.validatorId, stakeMon, consensusIds);
       const agg = aggregateMap.get(v.address);
       const benef = info?.validatorId ? getBeneficiaryForValidator(info.validatorId) : null;
+
+      // Single source of truth for ageSeconds, activeRatio, expectedGap,
+      // personalGap, participationPct, participationLong, health, sharePct.
+      // /api/validators/[address] calls the same helper so list and detail
+      // can never drift again. See [[validator-participation-divergence-2026-05-01]].
+      const m = computeValidatorMetrics({
+        blocksProduced: v.blocksProduced,
+        firstBlockTs: v.firstBlockTs,
+        lastBlockTs: v.lastBlockTs,
+        newestTs,
+        oldestTs,
+        windowSeconds,
+        totalBlocks: blocks.length,
+        producersInWindow: numValidators,
+        stakeMon,
+        isActiveSet,
+        totalActiveStake,
+        cumulativeBlocksObserved: aggregateState.totalBlocks,
+        cumulativeMinerBlocks: agg?.blocks ?? 0,
+      });
 
       return {
         ...v,
         moniker: info?.moniker ?? null,
         stakeMon,
+        validatorIds: auth.validatorIds,           // every ID under this auth (1 for single-ID operators)
+        activeValidatorIdsCount: auth.activeIds.length,
         commissionPct: info?.commissionPct ?? null,
         // `registered` — entry exists in the on-chain staking precompile
         // registry (matched via authAddress lookup, possibly via the
@@ -295,17 +237,17 @@ async function computeValidators(network: NetworkId) {
         // Equal to authAddress for most validators, separate wallet for some,
         // 0x0 for those who left it unconfigured.
         beneficiary: benef,
-        sharePct: Math.round((v.blocksProduced / blocks.length) * 1000) / 10,
-        ageSeconds,
-        participationPct,        // short window (high variance)
-        participationLong,       // cumulative since process start (stable)
+        sharePct: m.sharePct,
+        ageSeconds: m.ageSeconds,
+        participationPct: m.participationPct,        // short window (high variance)
+        participationLong: m.participationLong,      // cumulative since process start (stable)
         // Cumulative blocks/txs since aggregator started (process boot).
         // Useful for "long-running performance" view of a validator.
         cumulativeBlocks: agg?.blocks ?? 0,
         cumulativeTxs: agg?.txs ?? 0,
-        health,
-        isNewInWindow,
-        activeWindowSeconds: Math.round(activeWindowSec),
+        health: m.health,
+        isNewInWindow: m.isNewInWindow,
+        activeWindowSeconds: Math.round(m.activeWindowSeconds),
       };
     })
     .sort((a, b) => b.blocksProduced - a.blocksProduced);
