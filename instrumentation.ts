@@ -98,6 +98,15 @@ export async function register() {
     setInterval(() => void tickBeneficiaryScanner(), 5 * 60_000);
   }, 20_000);
 
+  // Public RPC catalog ping monitor — pings ~20 external Monad RPCs once per
+  // minute, records latency + tip + status. Powers /tools/rpcs page.
+  // Total egress: ~0.33 req/sec, no impact on monad-rpc itself.
+  const { tickRpcMonitor, RPC_PING_INTERVAL_MS } = await import('./lib/rpcMonitor');
+  setTimeout(() => {
+    void tickRpcMonitor();
+    setInterval(() => void tickRpcMonitor(), RPC_PING_INTERVAL_MS);
+  }, 30_000);
+
   // Chain-stats poller: hits /api/stats every 15s so InfluxDB `monad_chain`
   // (tps, gas_gwei, block_util_pct) stays continuously populated regardless
   // of live viewer activity. Without this, /api/history has null gaps for

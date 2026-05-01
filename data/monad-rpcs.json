@@ -1,0 +1,53 @@
+{
+  "$schema": "Public Monad RPC catalog. Add new entries via PR. Only endpoints accessible WITHOUT registration/API-key go here. API-key providers (Alchemy, QuickNode, Chainstack, etc.) are documented separately at https://docs.monad.xyz/tooling-and-infra/rpc-providers.",
+  "networks": {
+    "mainnet": {
+      "chainId": 143,
+      "chainIdHex": "0x8f",
+      "name": "Monad Mainnet",
+      "currency": { "name": "Monad", "symbol": "MON", "decimals": 18 },
+      "explorers": [
+        { "name": "Monad Vision", "url": "https://monadvision.com" },
+        { "name": "Monadscan",    "url": "https://monadscan.com" }
+      ]
+    },
+    "testnet": {
+      "chainId": 10143,
+      "chainIdHex": "0x279f",
+      "name": "Monad Testnet",
+      "currency": { "name": "Testnet MON", "symbol": "MON", "decimals": 18 },
+      "explorers": [
+        { "name": "Monad Explorer", "url": "https://testnet.monadexplorer.com" },
+        { "name": "Monadscan",      "url": "https://testnet.monadscan.com" },
+        { "name": "Monad Vision",   "url": "https://testnet.monadvision.com" },
+        { "name": "SocialScan",     "url": "https://monad-testnet.socialscan.io" }
+      ],
+      "faucets": [
+        { "name": "Foundation faucet",    "url": "https://testnet.monad.xyz" },
+        { "name": "Public faucet",        "url": "https://faucet.monad.xyz" }
+      ]
+    }
+  },
+  "rpcs": [
+    { "network": "mainnet", "provider": "Official",     "http": "https://rpc.monad.xyz",                              "ws": "wss://rpc.monad.xyz",                            "notes": "Foundation-operated, QuickNode-backed" },
+    { "network": "mainnet", "provider": "Alchemy",      "http": "https://rpc1.monad.xyz",                             "ws": null,                                              "notes": "Alchemy-operated public alias" },
+    { "network": "mainnet", "provider": "Ankr",         "http": "https://rpc3.monad.xyz",                             "ws": null,                                              "notes": "Ankr-operated public alias" },
+    { "network": "mainnet", "provider": "Tatum",        "http": "https://monad-mainnet.gateway.tatum.io",             "ws": null,                                              "notes": "" },
+    { "network": "mainnet", "provider": "bloXroute",    "http": "https://monad.rpc.blxrbdn.com",                      "ws": null,                                              "notes": "" },
+    { "network": "mainnet", "provider": "dRPC",         "http": "https://monad-mainnet.drpc.org",                     "ws": "wss://monad-mainnet.drpc.org",                    "notes": "" },
+    { "network": "mainnet", "provider": "MonadInfra",   "http": "https://rpc-mainnet.monadinfra.com",                 "ws": null,                                              "notes": "" },
+    { "network": "mainnet", "provider": "Natsai",       "http": "https://monad-mainnet-rpc.natsai.xyz",               "ws": null,                                              "notes": "Community-operated" },
+    { "network": "mainnet", "provider": "OnFinality",   "http": "https://monad-mainnet.api.onfinality.io/public",     "ws": null,                                              "notes": "" },
+    { "network": "mainnet", "provider": "Tenderly",     "http": "https://monad.gateway.tenderly.co",                  "ws": null,                                              "notes": "" },
+    { "network": "mainnet", "provider": "thirdweb",     "http": "https://143.rpc.thirdweb.com",                       "ws": null,                                              "notes": "" },
+
+    { "network": "testnet", "provider": "Official",     "http": "https://testnet-rpc.monad.xyz",                      "ws": "wss://testnet-rpc.monad.xyz",                     "notes": "" },
+    { "network": "testnet", "provider": "Ankr",         "http": "https://rpc.ankr.com/monad_testnet",                 "ws": null,                                              "notes": "" },
+    { "network": "testnet", "provider": "dRPC",         "http": "https://monad-testnet.drpc.org",                     "ws": "wss://monad-testnet.drpc.org",                    "notes": "" },
+    { "network": "testnet", "provider": "MonadInfra",   "http": "https://rpc-testnet.monadinfra.com",                 "ws": null,                                              "notes": "" },
+    { "network": "testnet", "provider": "OnFinality",   "http": "https://monad-testnet.api.onfinality.io/public",     "ws": null,                                              "notes": "" },
+    { "network": "testnet", "provider": "Tatum",        "http": "https://monad-testnet.gateway.tatum.io",             "ws": null,                                              "notes": "" },
+    { "network": "testnet", "provider": "Tenderly",     "http": "https://monad-testnet.gateway.tenderly.co",          "ws": null,                                              "notes": "" },
+    { "network": "testnet", "provider": "thirdweb",     "http": "https://10143.rpc.thirdweb.com",                     "ws": null,                                              "notes": "" }
+  ]
+}
