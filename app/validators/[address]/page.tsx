@@ -221,7 +221,7 @@ export default function ValidatorDetailPage() {
                 ))}
               </div>
 
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: 16, marginBottom: 16 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(340px, 100%), 1fr))', gap: 16, marginBottom: 16 }}>
                 {/* Registry info */}
                 <div className="card" style={{ padding: '20px 24px' }}>
                   <div style={{ fontFamily: 'Bebas Neue, sans-serif', fontSize: 14, letterSpacing: '0.12em', color: 'var(--gold)', marginBottom: 14 }}>
