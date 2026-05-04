@@ -3,8 +3,11 @@ import { useEffect, useState } from 'react';
 import HexBg from '@/components/HexBg';
 import SiteHeader from '@/components/SiteHeader';
 import TabNav from '@/components/TabNav';
+import Pagination from '@/components/Pagination';
 import { useNetwork } from '@/lib/useNetwork';
 import MainnetSoonCard from '@/components/MainnetSoonCard';
+
+const REORGS_PAGE_SIZE = 10;
 
 interface NakamotoEntry { n: number; cumPct: number }
 interface TopValidator { address: string; moniker: string | null; stakeMon: number; sharePct: number }
@@ -84,6 +87,7 @@ export default function NetworkPage() {
   const [network, setNetwork] = useNetwork();
   const [d, setD] = useState<NetworkHealth | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [reorgPage, setReorgPage] = useState(1);
 
   useEffect(() => {
     let cancelled = false;
@@ -226,51 +230,69 @@ export default function NetworkPage() {
                 <div style={{ padding: '10px', fontSize: 11, color: 'var(--text-muted)', border: '1px dashed rgba(201,168,76,0.1)', borderRadius: 4 }}>
                   No reorgs detected in this window — chain is stable.
                 </div>
-              ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                  {d.reorgs.recent.map((r, i) => (
-                    <div key={i} style={{
-                      padding: '8px 10px',
-                      border: '1px solid rgba(201,168,76,0.06)',
-                      borderLeft: '3px solid #E05252',
-                      borderRadius: 4,
-                      background: 'rgba(224,82,82,0.02)',
-                      fontFamily: 'DM Mono, monospace', fontSize: 11,
-                      lineHeight: 1.6,
-                    }}>
-                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'baseline' }}>
-                        <span style={{ color: 'var(--text-muted)' }}>{fmtTime(r.ts)}</span>
-                        <a
-                          href={`/block/${r.blockNumber}`}
-                          style={{ color: '#E05252', textDecoration: 'none', fontWeight: 500 }}
-                        >
-                          block {r.blockNumber.toLocaleString()}
-                        </a>
-                        <span style={{ color: 'var(--gold)' }}>depth {r.depth}</span>
-                        {r.newTxCount !== undefined && (
-                          <span style={{ color: 'var(--text-muted)' }}>{r.newTxCount} tx</span>
-                        )}
-                        {r.detectionLagSec !== undefined && (
-                          <span style={{ color: 'var(--text-muted)', fontSize: 10 }}>
-                            detected +{r.detectionLagSec}s
-                          </span>
-                        )}
-                      </div>
-                      {r.newMiner && (
-                        <div style={{ marginTop: 2, color: 'var(--text-muted)', fontSize: 10 }}>
-                          replacement miner:{' '}
-                          <a href={`/address/${r.newMiner}`} style={{ color: 'var(--gold-dim)', textDecoration: 'none' }}>
-                            {r.newMiner.slice(0, 14)}…{r.newMiner.slice(-6)}
-                          </a>
-                        </div>
-                      )}
-                      <div style={{ marginTop: 2, color: 'var(--text-muted)', fontSize: 10, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {r.oldHash.slice(0, 14)}… → {r.newHash.slice(0, 14)}…
-                      </div>
+              ) : (() => {
+                const totalReorgs = d.reorgs.recent.length;
+                const totalPages = Math.max(1, Math.ceil(totalReorgs / REORGS_PAGE_SIZE));
+                // Clamp page to valid range — list can shrink/grow between polls.
+                const safePage = Math.min(Math.max(1, reorgPage), totalPages);
+                const startIdx = (safePage - 1) * REORGS_PAGE_SIZE;
+                const pageItems = d.reorgs.recent.slice(startIdx, startIdx + REORGS_PAGE_SIZE);
+                return (
+                  <>
+                    <div style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: 8, fontFamily: 'DM Mono, monospace' }}>
+                      Showing {startIdx + 1}–{startIdx + pageItems.length} of {totalReorgs}
                     </div>
-                  ))}
-                </div>
-              )}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                      {pageItems.map((r, i) => (
+                        <div key={`${r.ts}-${r.blockNumber}-${i}`} style={{
+                          padding: '8px 10px',
+                          border: '1px solid rgba(201,168,76,0.06)',
+                          borderLeft: '3px solid #E05252',
+                          borderRadius: 4,
+                          background: 'rgba(224,82,82,0.02)',
+                          fontFamily: 'DM Mono, monospace', fontSize: 11,
+                          lineHeight: 1.6,
+                        }}>
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'baseline' }}>
+                            <span style={{ color: 'var(--text-muted)' }}>{fmtTime(r.ts)}</span>
+                            <a
+                              href={`/block/${r.blockNumber}`}
+                              style={{ color: '#E05252', textDecoration: 'none', fontWeight: 500 }}
+                            >
+                              block {r.blockNumber.toLocaleString()}
+                            </a>
+                            <span style={{ color: 'var(--gold)' }}>depth {r.depth}</span>
+                            {r.newTxCount !== undefined && (
+                              <span style={{ color: 'var(--text-muted)' }}>{r.newTxCount} tx</span>
+                            )}
+                            {r.detectionLagSec !== undefined && (
+                              <span style={{ color: 'var(--text-muted)', fontSize: 10 }}>
+                                detected +{r.detectionLagSec}s
+                              </span>
+                            )}
+                          </div>
+                          {r.newMiner && (
+                            <div style={{ marginTop: 2, color: 'var(--text-muted)', fontSize: 10 }}>
+                              replacement miner:{' '}
+                              <a href={`/address/${r.newMiner}`} style={{ color: 'var(--gold-dim)', textDecoration: 'none' }}>
+                                {r.newMiner.slice(0, 14)}…{r.newMiner.slice(-6)}
+                              </a>
+                            </div>
+                          )}
+                          <div style={{ marginTop: 2, color: 'var(--text-muted)', fontSize: 10, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {r.oldHash.slice(0, 14)}… → {r.newHash.slice(0, 14)}…
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    <Pagination
+                      currentPage={safePage}
+                      totalPages={totalPages}
+                      onPageChange={setReorgPage}
+                    />
+                  </>
+                );
+              })()}
             </Section>
 
             {/* Geo distribution */}
