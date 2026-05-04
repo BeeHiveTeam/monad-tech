@@ -10,11 +10,17 @@
  */
 
 import { NETWORKS, NetworkId } from './networks';
+import {
+  rpcUrlFor as resolveMainnetUrl,
+  rotateMainnetRpc,
+  isTransientRpcError,
+} from './mainnetRpcFallback';
 
 const TIP_TTL_MS = 500;
 
 function rpcUrlFor(network: NetworkId): string {
   if (network === 'testnet' && process.env.MONAD_RPC_URL) return process.env.MONAD_RPC_URL;
+  if (network === 'mainnet') return resolveMainnetUrl('mainnet');
   return NETWORKS[network].rpc;
 }
 
@@ -45,29 +51,59 @@ function stateFor(network: NetworkId): PerNetworkState {
 }
 
 async function fetchTipFresh(network: NetworkId): Promise<TipBlock> {
-  const res = await fetch(rpcUrlFor(network), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      jsonrpc: '2.0', id: 1,
-      method: 'eth_getBlockByNumber',
-      params: ['latest', false],
-    }),
-    signal: AbortSignal.timeout(6_000),
+  const body = JSON.stringify({
+    jsonrpc: '2.0', id: 1,
+    method: 'eth_getBlockByNumber',
+    params: ['latest', false],
   });
-  if (!res.ok) throw new Error(`tipCache HTTP ${res.status}`);
-  const j = await res.json() as { result?: {
-    number: string; hash: string; parentHash: string; timestamp: string;
-  }};
-  const r = j.result;
-  if (!r) throw new Error('tipCache: empty result');
-  return {
-    number: parseInt(r.number, 16),
-    hash: r.hash,
-    parentHash: r.parentHash,
-    timestampHex: r.timestamp,
-    timestamp: parseInt(r.timestamp, 16),
-  };
+  const attempts = network === 'mainnet' ? 2 : 1;
+  let lastErr: unknown = null;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      const res = await fetch(rpcUrlFor(network), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body,
+        signal: AbortSignal.timeout(6_000),
+      });
+      if (!res.ok) {
+        if (network === 'mainnet' && isTransientRpcError(null, res.status)) {
+          rotateMainnetRpc(`tipCache HTTP ${res.status}`);
+          lastErr = new Error(`tipCache HTTP ${res.status}`);
+          continue;
+        }
+        throw new Error(`tipCache HTTP ${res.status}`);
+      }
+      const j = await res.json() as {
+        result?: { number: string; hash: string; parentHash: string; timestamp: string };
+        error?: { message: string };
+      };
+      // Some public RPCs return rate-limit notice as an `error` field on a 200 OK
+      // response — rotate and retry rather than throw upward.
+      if (network === 'mainnet' && j.error?.message && isTransientRpcError(j.error.message)) {
+        rotateMainnetRpc(`tipCache json err: ${j.error.message.slice(0, 60)}`);
+        lastErr = new Error(j.error.message);
+        continue;
+      }
+      const r = j.result;
+      if (!r) throw new Error('tipCache: empty result');
+      return {
+        number: parseInt(r.number, 16),
+        hash: r.hash,
+        parentHash: r.parentHash,
+        timestampHex: r.timestamp,
+        timestamp: parseInt(r.timestamp, 16),
+      };
+    } catch (err) {
+      lastErr = err;
+      if (network === 'mainnet' && isTransientRpcError(err)) {
+        rotateMainnetRpc(`tipCache fetch err`);
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
 }
 
 /**

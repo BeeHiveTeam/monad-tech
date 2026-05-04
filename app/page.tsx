@@ -396,10 +396,9 @@ export default function Home() {
             </div>
           </div>
 
-          {/* Footer */}
-          <div style={{ textAlign: 'center', marginTop: 40, paddingBottom: 32, color: 'var(--text-muted)', fontSize: 11, letterSpacing: '0.06em' }}>
-            <a href="https://bee-hive.work" style={{ color: 'var(--gold-dim)', textDecoration: 'none' }}>BeeHive</a>
-            {' '}·{' '}Monad Network Monitor · Updates every {POLL_INTERVAL / 1000}s
+          {/* Page-specific status — site-wide credits + contact links live in the global Footer */}
+          <div style={{ textAlign: 'center', marginTop: 40, paddingBottom: 0, color: 'var(--text-muted)', fontSize: 11, letterSpacing: '0.06em' }}>
+            Monad Network Monitor · Updates every {POLL_INTERVAL / 1000}s
           </div>
         </main>
       </div>

@@ -23,7 +23,11 @@ export async function GET(req: NextRequest) {
     // Primary path: read txs from the WebSocket ring buffer. Blocks are
     // pre-enriched via background eth_getBlockByNumber(num, true) on each push,
     // so tx data (from/to/value/gasPrice) is already in RAM.
-    const ring = getRingBlocks(25);
+    //
+    // Testnet-only — the ring is filled by our testnet WS subscription. Mainnet
+    // falls through to the RPC fetch path so /api/transactions doesn't
+    // intermittently leak testnet hashes into the mainnet view.
+    const ring = network === 'testnet' ? getRingBlocks(25) : [];
     const ringHasFullTxs = ring.length >= 25 && ring.every(b => b.txs !== null);
     if (ringHasFullTxs) {
       const txs: OutTx[] = [];

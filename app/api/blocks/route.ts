@@ -17,7 +17,12 @@ export async function GET(req: NextRequest) {
     // Each block was pushed via eth_subscribe(newHeads) and enriched with txCount
     // via a single eth_getBlockByNumber(num, false). Zero RPC calls at request
     // time — the heavy lifting is done by the background stream.
-    const ring = getRingBlocks(20);
+    //
+    // The ring buffer is filled by our testnet WS subscription only —
+    // bypass it for mainnet (we'd serve testnet block numbers under the
+    // mainnet view otherwise — confusing-looking "stale" data on the
+    // Latest Blocks table).
+    const ring = network === 'testnet' ? getRingBlocks(20) : [];
     if (ring.length >= 20) {
       const blocks = ring.map(b => ({
         number: b.number,

@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import AnalyticsTracker from "@/components/AnalyticsTracker";
+import Footer from "@/components/Footer";
 import { Suspense } from "react";
 
 const SITE_URL = "https://monad-tech.com";
@@ -192,6 +193,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body>
         <Suspense fallback={null}><AnalyticsTracker /></Suspense>
         {children}
+        <Footer />
         {/* Cloudflare Web Analytics — RUM + Core Web Vitals */}
         <script
           defer

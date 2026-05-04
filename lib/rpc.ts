@@ -1,40 +1,79 @@
 import { NETWORKS, NetworkId } from './networks';
+import { rpcUrlFor, rotateMainnetRpc, isTransientRpcError } from './mainnetRpcFallback';
 
 function getRpcUrl(network: NetworkId): string {
+  // Testnet always uses our validator (or fallback to NETWORKS default).
+  // Mainnet rotates between public RPCs from data/monad-rpcs.json on
+  // failure — see lib/mainnetRpcFallback.ts for rationale.
   if (network === 'testnet' && process.env.MONAD_RPC_URL) {
     return process.env.MONAD_RPC_URL;
   }
+  if (network === 'mainnet') return rpcUrlFor('mainnet');
   return NETWORKS[network].rpc;
 }
 
-async function rpcCall(network: NetworkId, method: string, params: unknown[] = []) {
-  const url = getRpcUrl(network);
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
-    signal: AbortSignal.timeout(8000),
-  });
-  if (!res.ok) throw new Error(`RPC HTTP ${res.status}`);
-  const json = await res.json();
+/**
+ * Single-shot RPC fetch with one retry on transient errors. For mainnet,
+ * the retry rotates to the next URL in the fallback list; for testnet it
+ * just retries the same URL after a brief pause (single endpoint).
+ */
+async function rpcFetch(network: NetworkId, body: string, timeoutMs: number): Promise<unknown> {
+  const attempts = network === 'mainnet' ? 2 : 1;
+  let lastErr: unknown = null;
+  for (let i = 0; i < attempts; i++) {
+    const url = getRpcUrl(network);
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body,
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      if (!res.ok) {
+        if (network === 'mainnet' && isTransientRpcError(null, res.status)) {
+          rotateMainnetRpc(`HTTP ${res.status}`);
+          lastErr = new Error(`RPC HTTP ${res.status}`);
+          continue;
+        }
+        throw new Error(`RPC HTTP ${res.status}`);
+      }
+      const json = await res.json();
+      // Detect rate-limit JSON-RPC error embedded in 200-OK response
+      // (QuickNode's -32007 comes back this way).
+      if (network === 'mainnet' && Array.isArray(json) === false && json?.error?.message) {
+        const errStr: string = String(json.error.message);
+        if (isTransientRpcError(errStr)) {
+          rotateMainnetRpc(`json error: ${errStr.slice(0, 60)}`);
+          lastErr = new Error(errStr);
+          continue;
+        }
+      }
+      return json;
+    } catch (err) {
+      lastErr = err;
+      if (network === 'mainnet' && isTransientRpcError(err)) {
+        rotateMainnetRpc(`fetch err: ${(err instanceof Error ? err.message : String(err)).slice(0, 60)}`);
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
+}
+
+async function rpcCall<T = unknown>(network: NetworkId, method: string, params: unknown[] = []): Promise<T> {
+  const body = JSON.stringify({ jsonrpc: '2.0', id: 1, method, params });
+  const json = await rpcFetch(network, body, 8000) as { result?: T; error?: { message: string } };
   if (json.error) throw new Error(json.error.message);
-  return json.result;
+  return json.result as T;
 }
 
 // JSON-RPC batch: one HTTP request, array of methods, array of results back.
 export async function rpcBatch(network: NetworkId, requests: { method: string; params: unknown[] }[]) {
-  const url = getRpcUrl(network);
-  const body = requests.map((r, i) => ({
+  const body = JSON.stringify(requests.map((r, i) => ({
     jsonrpc: '2.0', id: i, method: r.method, params: r.params,
-  }));
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(30000),
-  });
-  if (!res.ok) throw new Error(`RPC HTTP ${res.status}`);
-  const json = await res.json() as { id: number; result?: unknown; error?: { message: string } }[];
+  })));
+  const json = await rpcFetch(network, body, 30000) as { id: number; result?: unknown; error?: { message: string } }[];
   // Sort by id to preserve order
   const sorted = new Array(requests.length);
   for (const item of json) {
@@ -44,7 +83,7 @@ export async function rpcBatch(network: NetworkId, requests: { method: string; p
 }
 
 export async function getBlockNumber(network: NetworkId): Promise<bigint> {
-  const hex = await rpcCall(network, 'eth_blockNumber');
+  const hex = await rpcCall<string>(network, 'eth_blockNumber');
   return BigInt(hex);
 }
 
@@ -54,12 +93,12 @@ export async function getBlock(network: NetworkId, blockNumber: bigint | 'latest
 }
 
 export async function getGasPrice(network: NetworkId): Promise<bigint> {
-  const hex = await rpcCall(network, 'eth_gasPrice');
+  const hex = await rpcCall<string>(network, 'eth_gasPrice');
   return BigInt(hex);
 }
 
 export async function getLatestBlocks(network: NetworkId, count = 20) {
-  const latestHex = await rpcCall(network, 'eth_blockNumber');
+  const latestHex = await rpcCall<string>(network, 'eth_blockNumber');
   const latest = parseInt(latestHex, 16);
 
   const promises = Array.from({ length: count }, (_, i) => {
@@ -80,7 +119,7 @@ export async function getLatestBlocksBatched(
   pauseMs?: number,
 ) {
   const local = !!(network === 'testnet' && process.env.MONAD_RPC_URL);
-  const latestHex = await rpcCall(network, 'eth_blockNumber');
+  const latestHex = await rpcCall<string>(network, 'eth_blockNumber');
   const latest = parseInt(latestHex, 16);
 
   if (local) {
@@ -127,6 +166,6 @@ export async function getLatestBlocksBatched(
 }
 
 export async function getChainId(network: NetworkId): Promise<number> {
-  const hex = await rpcCall(network, 'eth_chainId');
+  const hex = await rpcCall<string>(network, 'eth_chainId');
   return parseInt(hex, 16);
 }

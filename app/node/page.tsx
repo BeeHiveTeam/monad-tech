@@ -754,9 +754,8 @@ export default function NodePage() {
             Validator logs are shipped via otelcol-contrib journald-receiver → Loki, retained 7 days.
           </div>
 
-          <div style={{ textAlign: 'center', marginTop: 40, paddingBottom: 32, color: 'var(--text-muted)', fontSize: 11, letterSpacing: '0.06em' }}>
-            <a href="https://bee-hive.work" style={{ color: 'var(--gold-dim)', textDecoration: 'none' }}>BeeHive</a>
-            {' '}·{' '}Monad Network Monitor
+          <div style={{ textAlign: 'center', marginTop: 40, paddingBottom: 0, color: 'var(--text-muted)', fontSize: 11, letterSpacing: '0.06em' }}>
+            Monad Network Monitor
           </div>
         </main>
       </div>
