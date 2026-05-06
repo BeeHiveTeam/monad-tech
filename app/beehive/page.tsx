@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import HexBg from '@/components/HexBg';
 import SiteHeader from '@/components/SiteHeader';
 import TabNav from '@/components/TabNav';
+import NodeVersionCheck from '@/components/NodeVersionCheck';
 import { useNetwork } from '@/lib/useNetwork';
 
 interface BeeHiveData {
@@ -166,6 +167,11 @@ export default function BeeHivePage() {
 
           {/* LIVE INFRA STATS — testnet only (we don't run a mainnet node yet) */}
           {network === 'testnet' ? (
+            <>
+            {/* Version compliance panel — installed vs latest GitHub release.
+                Lets delegators see operator follows release cadence; matches
+                the panel shown on auth-gated /node so signal is consistent. */}
+            <NodeVersionCheck />
             <div style={{
               display: 'grid',
               gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))',
@@ -202,6 +208,7 @@ export default function BeeHivePage() {
                 sub={data?.configured.validatorAddress ? 'set on-chain' : 'set at activation'}
               />
             </div>
+            </>
           ) : (
             <div style={{
               padding: '16px 20px', marginBottom: 20,
