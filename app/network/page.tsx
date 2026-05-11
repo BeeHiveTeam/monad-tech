@@ -212,7 +212,7 @@ export default function NetworkPage() {
             {/* Reorgs */}
             <Section
               title="REORGS"
-              subtitle="Detected by comparing hashes at tip/tip-1/tip-2 every 4s. In-memory ring (since restart) merged with persisted history from InfluxDB (last 7 days)."
+              subtitle="Detected by comparing hashes at tip/tip-1/tip-2 every 4s. In-memory ring (since restart) merged with persisted history from InfluxDB (last 30 days)."
             >
               <div style={{ display: 'flex', gap: 32, marginBottom: 14, flexWrap: 'wrap' }}>
                 <div>

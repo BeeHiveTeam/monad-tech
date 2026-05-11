@@ -1,6 +1,7 @@
 'use client';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+import { useEffect, useRef, useState } from 'react';
 
 interface Tab {
   label: string;
@@ -14,16 +15,43 @@ const TABS: Tab[] = [
   { label: 'Validators', href: '/validators' },
   { label: 'Network Health', href: '/network' },
   { label: 'Incidents', href: '/incidents' },
-  { label: 'RPCs', href: '/tools/rpcs' },
+  { label: 'Tools', href: '/tools' },
   { label: 'BeeHive', href: '/beehive', badge: 'OPERATOR' },
 ];
 
 export default function TabNav() {
   const pathname = usePathname();
+  const navRef = useRef<HTMLDivElement | null>(null);
+  const activeRef = useRef<HTMLDivElement | null>(null);
+  const [fades, setFades] = useState({ left: false, right: false });
+
+  useEffect(() => {
+    const nav = navRef.current;
+    if (!nav) return;
+    const active = activeRef.current;
+    if (active && nav.scrollWidth > nav.clientWidth) {
+      const target = active.offsetLeft + active.offsetWidth / 2 - nav.clientWidth / 2;
+      nav.scrollLeft = Math.max(0, Math.min(target, nav.scrollWidth - nav.clientWidth));
+    }
+    const update = () => {
+      setFades({
+        left: nav.scrollLeft > 4,
+        right: nav.scrollWidth - nav.clientWidth - nav.scrollLeft > 4,
+      });
+    };
+    update();
+    nav.addEventListener('scroll', update, { passive: true });
+    window.addEventListener('resize', update);
+    return () => {
+      nav.removeEventListener('scroll', update);
+      window.removeEventListener('resize', update);
+    };
+  }, [pathname]);
 
   return (
-    <div className="tab-nav" style={{
-      display: 'flex', gap: 0, marginBottom: 24,
+    <div style={{ position: 'relative', marginBottom: 24 }}>
+    <div ref={navRef} className="tab-nav" style={{
+      display: 'flex', gap: 0,
       borderBottom: '1px solid var(--border)',
       overflowX: 'auto',
       WebkitOverflowScrolling: 'touch',
@@ -31,9 +59,13 @@ export default function TabNav() {
       msOverflowStyle: 'none',       // IE/Edge
     }}>
       {TABS.map((tab) => {
-        const isActive = pathname === tab.href;
+        // Tools tab is active for the hub `/tools` AND any sub-route `/tools/*`.
+        // Other tabs use exact match to avoid accidental highlighting.
+        const isActive = tab.href === '/tools'
+          ? (pathname === '/tools' || pathname.startsWith('/tools/'))
+          : pathname === tab.href;
         const content = (
-          <div className="tab-link" style={{
+          <div ref={isActive ? activeRef : undefined} className="tab-link" style={{
             padding: '12px 22px',
             fontFamily: 'Bebas Neue, sans-serif',
             fontSize: 16,
@@ -67,6 +99,21 @@ export default function TabNav() {
         if (tab.disabled) return <div key={tab.href}>{content}</div>;
         return <Link key={tab.href} href={tab.href} style={{ textDecoration: 'none' }}>{content}</Link>;
       })}
+    </div>
+    {fades.left && (
+      <div aria-hidden style={{
+        position: 'absolute', top: 0, left: 0, bottom: 1,
+        width: 36, pointerEvents: 'none',
+        background: 'linear-gradient(to left, rgba(8,8,8,0), var(--black))',
+      }} />
+    )}
+    {fades.right && (
+      <div aria-hidden style={{
+        position: 'absolute', top: 0, right: 0, bottom: 1,
+        width: 36, pointerEvents: 'none',
+        background: 'linear-gradient(to right, rgba(8,8,8,0), var(--black))',
+      }} />
+    )}
     </div>
   );
 }

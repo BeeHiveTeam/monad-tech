@@ -73,7 +73,9 @@ export async function GET() {
   // few minutes after every deploy. InfluxDB has been receiving every
   // detected reorg since the dual-write was added, so we can pull a wide
   // window cheaply (cardinality is low — typical testnet has <5 reorgs/day).
-  const persistedReorgs = (await fetchReorgsFromInflux(7 * 86400)) ?? [];
+  // Window: 30d. Chose 30d after 7d showed empty for ~24h gaps between
+  // reorg clusters, leaving the section looking broken when chain was just stable.
+  const persistedReorgs = (await fetchReorgsFromInflux(30 * 86400)) ?? [];
   const seen = new Set(reorg.events.map(e => `${e.ts}-${e.blockNumber}`));
   const merged = [
     ...reorg.events,
@@ -111,8 +113,8 @@ export async function GET() {
       totalDetected: totalDetectedAllTime,
       trackedBlocks: reorg.trackedBlocks,
       windowStart: merged.length ? merged[merged.length - 1].ts : null,
-      historyWindowDays: 7,
-      sourceNote: 'In-memory ring (since service restart) merged with persisted history from InfluxDB (last 7 days).',
+      historyWindowDays: 30,
+      sourceNote: 'In-memory ring (since service restart) merged with persisted history from InfluxDB (last 30 days).',
     },
     geo: geo ?? {
       fetchedAt: null,

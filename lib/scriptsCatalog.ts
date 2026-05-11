@@ -1,0 +1,194 @@
+/**
+ * BeeHive operator-tooling catalog (BeeHiveTeam/monad-tools).
+ *
+ * Static metadata about each script + a cached GitHub API enrichment with
+ * commit hash, last-modified date, line counts. Used by /tools/scripts to
+ * render a live-ish status of each tool.
+ *
+ * Cache: 10 minutes per repo (GitHub unauthenticated rate limit is 60 req/h
+ * per IP). Fits well within budget.
+ */
+
+const REPO_OWNER = 'BeeHiveTeam';
+const REPO_NAME = 'monad-tools';
+const REPO_BRANCH = 'main';
+const CACHE_TTL_MS = 10 * 60_000;
+
+export interface ScriptEntry {
+  name: string;
+  path: string;            // file path inside repo, e.g. "doctor/monad-doctor"
+  purpose: string;         // one-liner for card title
+  description: string;     // 2-3 sentences for body
+  highlights: string[];    // bullets shown on card
+  rawUrl: string;
+  githubUrl: string;       // tree URL of the directory
+  installCmd: string;
+  // Live-fetched (may be null if API unavailable)
+  lines: number | null;
+  lastCommitSha: string | null;
+  lastCommitDate: string | null;
+}
+
+export interface RepoMeta {
+  url: string;
+  description: string | null;
+  stars: number;
+  forks: number;
+  lastCommitSha: string | null;
+  lastCommitDate: string | null;
+  defaultBranch: string;
+}
+
+export interface CatalogResponse {
+  repo: RepoMeta;
+  scripts: ScriptEntry[];
+  fetchedAt: number;
+  cacheAgeSeconds: number;
+}
+
+const STATIC_SCRIPTS: Omit<ScriptEntry, 'lines' | 'lastCommitSha' | 'lastCommitDate'>[] = [
+  {
+    name: 'monad-doctor',
+    path: 'doctor/monad-doctor',
+    purpose: 'Pre-flight readiness check',
+    description:
+      "32+ checks across hardware, OS, network, security and Monad-specific config. " +
+      "Catches the things operators learn about the hard way: SMT enabled in BIOS, " +
+      "kernel in the buggy 6.8.0-{56..59} range, NVMe stuck on 4096-byte LBA, " +
+      "vm.swappiness=60 inflating vote_delay, or RPC ports publicly exposed (VDP risk).",
+    highlights: [
+      '5 sections — hardware / os / network / security / monad',
+      '~30 second runtime, single bash file, zero deps',
+      'Cross-references docs.monad.xyz for every check',
+      'JSON output for CI / monitoring integration',
+    ],
+    rawUrl: `https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/${REPO_BRANCH}/doctor/monad-doctor`,
+    githubUrl: `https://github.com/${REPO_OWNER}/${REPO_NAME}/tree/${REPO_BRANCH}/doctor`,
+    installCmd: `curl -fsSL https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/${REPO_BRANCH}/doctor/monad-doctor | sudo bash`,
+  },
+  {
+    name: 'monad-validator-setup',
+    path: 'validator-setup/monad-validator-setup',
+    purpose: 'One-shot host configuration',
+    description:
+      "14 idempotent setup steps that take a fresh Ubuntu 24.04 box to a fully-configured " +
+      "Monad node — sysctl tuning, ulimits, IO scheduler, chrony, monad apt repo, " +
+      "monad user/dirs, /dev/triedb udev SYMLINK, UFW + iptables UDP DDoS filter, " +
+      "bootstrap configs from MF_BUCKET. Pick testnet or mainnet up front.",
+    highlights: [
+      '--network=testnet|mainnet (interactive prompt or flag)',
+      '--node-type=validator|full (different node.toml templates)',
+      '--dry-run mode shows every change before applying',
+      'Backs up every file before edit (.bak.<timestamp>)',
+    ],
+    rawUrl: `https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/${REPO_BRANCH}/validator-setup/monad-validator-setup`,
+    githubUrl: `https://github.com/${REPO_OWNER}/${REPO_NAME}/tree/${REPO_BRANCH}/validator-setup`,
+    installCmd: `git clone https://github.com/${REPO_OWNER}/${REPO_NAME}.git\ncd monad-tools && sudo ./validator-setup/monad-validator-setup`,
+  },
+  {
+    name: 'monad-authudp-check',
+    path: 'authudp-check/monad-authudp-check',
+    purpose: 'Auth UDP compliance verification',
+    description:
+      "Verifies your node will not be disconnected when v0.14.3 enforces Authenticated " +
+      "UDP at the network level. Two-tier version check (0.12.6 capability / 0.14.0 " +
+      "operational), validates 4 Auth UDP keys in correct TOML sections, runtime port " +
+      "and log inspection.",
+    highlights: [
+      'Cross-references Foundation Discord 2026-05-06 cutoff',
+      'Section-aware TOML key matching ([peer_discovery] / [network])',
+      'Optional --post URL for compliance-tracker integration',
+      'JSON output, --quiet mode for cron',
+    ],
+    rawUrl: `https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/${REPO_BRANCH}/authudp-check/monad-authudp-check`,
+    githubUrl: `https://github.com/${REPO_OWNER}/${REPO_NAME}/tree/${REPO_BRANCH}/authudp-check`,
+    installCmd: `curl -fsSL https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/${REPO_BRANCH}/authudp-check/monad-authudp-check | bash`,
+  },
+];
+
+interface CacheEntry {
+  data: CatalogResponse;
+  fetchedAt: number;
+}
+const g = globalThis as { __scriptsCatalogCache__?: CacheEntry };
+
+async function fetchGitHub<T>(url: string): Promise<T | null> {
+  try {
+    const res = await fetch(url, {
+      headers: { Accept: 'application/vnd.github+json' },
+      signal: AbortSignal.timeout(8_000),
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as T;
+  } catch {
+    return null;
+  }
+}
+
+interface GhRepo {
+  description: string | null;
+  stargazers_count: number;
+  forks_count: number;
+  default_branch: string;
+}
+interface GhCommit {
+  sha: string;
+  commit: { committer: { date: string } };
+}
+interface GhContent { size: number }
+
+async function buildCatalog(): Promise<CatalogResponse> {
+  const apiBase = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}`;
+
+  const [repoMeta, latestCommit] = await Promise.all([
+    fetchGitHub<GhRepo>(apiBase),
+    fetchGitHub<GhCommit[]>(`${apiBase}/commits?per_page=1&sha=${REPO_BRANCH}`),
+  ]);
+
+  // Per-script latest commit (filter by file path) + line count via raw download
+  const enriched = await Promise.all(
+    STATIC_SCRIPTS.map(async (s): Promise<ScriptEntry> => {
+      const [perFileCommit, raw] = await Promise.all([
+        fetchGitHub<GhCommit[]>(`${apiBase}/commits?path=${encodeURIComponent(s.path)}&per_page=1&sha=${REPO_BRANCH}`),
+        fetch(s.rawUrl, { signal: AbortSignal.timeout(8_000) })
+          .then(r => r.ok ? r.text() : null)
+          .catch(() => null),
+      ]);
+      return {
+        ...s,
+        lines: raw ? raw.split('\n').length : null,
+        lastCommitSha: perFileCommit?.[0]?.sha?.slice(0, 7) ?? null,
+        lastCommitDate: perFileCommit?.[0]?.commit?.committer?.date ?? null,
+      };
+    })
+  );
+
+  return {
+    repo: {
+      url: `https://github.com/${REPO_OWNER}/${REPO_NAME}`,
+      description: repoMeta?.description ?? null,
+      stars: repoMeta?.stargazers_count ?? 0,
+      forks: repoMeta?.forks_count ?? 0,
+      lastCommitSha: latestCommit?.[0]?.sha?.slice(0, 7) ?? null,
+      lastCommitDate: latestCommit?.[0]?.commit?.committer?.date ?? null,
+      defaultBranch: repoMeta?.default_branch ?? REPO_BRANCH,
+    },
+    scripts: enriched,
+    fetchedAt: Date.now(),
+    cacheAgeSeconds: 0,
+  };
+}
+
+export async function getScriptsCatalog(): Promise<CatalogResponse> {
+  const now = Date.now();
+  const cached = g.__scriptsCatalogCache__;
+  if (cached && now - cached.fetchedAt < CACHE_TTL_MS) {
+    return {
+      ...cached.data,
+      cacheAgeSeconds: Math.floor((now - cached.fetchedAt) / 1000),
+    };
+  }
+  const fresh = await buildCatalog();
+  g.__scriptsCatalogCache__ = { data: fresh, fetchedAt: now };
+  return fresh;
+}
