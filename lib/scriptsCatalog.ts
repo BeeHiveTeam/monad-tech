@@ -52,15 +52,16 @@ const STATIC_SCRIPTS: Omit<ScriptEntry, 'lines' | 'lastCommitSha' | 'lastCommitD
     path: 'doctor/monad-doctor',
     purpose: 'Pre-flight readiness check',
     description:
-      "32+ checks across hardware, OS, network, security and Monad-specific config. " +
+      "50 checks across hardware, OS, network, security and Monad-specific config. " +
       "Catches the things operators learn about the hard way: SMT enabled in BIOS, " +
       "kernel in the buggy 6.8.0-{56..59} range, NVMe stuck on 4096-byte LBA, " +
-      "vm.swappiness=60 inflating vote_delay, or RPC ports publicly exposed (VDP risk).",
+      "vm.swappiness=60 inflating vote_delay, missing /dev/triedb udev SYMLINK, " +
+      "CVE-2026-31431 algif_aead not blacklisted, or RPC ports publicly exposed (VDP risk).",
     highlights: [
       '5 sections — hardware / os / network / security / monad',
       '~30 second runtime, single bash file, zero deps',
       'Cross-references docs.monad.xyz for every check',
-      'JSON output for CI / monitoring integration',
+      '--json / --quick flags for CI integration',
     ],
     rawUrl: `https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/${REPO_BRANCH}/doctor/monad-doctor`,
     githubUrl: `https://github.com/${REPO_OWNER}/${REPO_NAME}/tree/${REPO_BRANCH}/doctor`,
@@ -71,15 +72,16 @@ const STATIC_SCRIPTS: Omit<ScriptEntry, 'lines' | 'lastCommitSha' | 'lastCommitD
     path: 'validator-setup/monad-validator-setup',
     purpose: 'One-shot host configuration',
     description:
-      "14 idempotent setup steps that take a fresh Ubuntu 24.04 box to a fully-configured " +
+      "13 idempotent setup steps that take a fresh Ubuntu 24.04 box to a fully-configured " +
       "Monad node — sysctl tuning, ulimits, IO scheduler, chrony, monad apt repo, " +
-      "monad user/dirs, /dev/triedb udev SYMLINK, UFW + iptables UDP DDoS filter, " +
-      "bootstrap configs from MF_BUCKET. Pick testnet or mainnet up front.",
+      "monad user/dirs, /dev/triedb udev SYMLINK, monad-cruft.timer, UFW + iptables UDP " +
+      "DDoS filter, bootstrap configs from MF_BUCKET. Per-network monad pin: " +
+      "testnet → 0.14.3, mainnet → 0.14.2 (overridable via MONAD_PKG_VERSION).",
     highlights: [
       '--network=testnet|mainnet (interactive prompt or flag)',
       '--node-type=validator|full (different node.toml templates)',
-      '--dry-run mode shows every change before applying',
-      'Backs up every file before edit (.bak.<timestamp>)',
+      '--with-monitoring installs BeeHive monad-grafana stack',
+      '--dry-run shows every change; backs up files (.bak.<timestamp>)',
     ],
     rawUrl: `https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/${REPO_BRANCH}/validator-setup/monad-validator-setup`,
     githubUrl: `https://github.com/${REPO_OWNER}/${REPO_NAME}/tree/${REPO_BRANCH}/validator-setup`,
@@ -90,15 +92,16 @@ const STATIC_SCRIPTS: Omit<ScriptEntry, 'lines' | 'lastCommitSha' | 'lastCommitD
     path: 'authudp-check/monad-authudp-check',
     purpose: 'Auth UDP compliance verification',
     description:
-      "Verifies your node will not be disconnected when v0.14.3 enforces Authenticated " +
-      "UDP at the network level. Two-tier version check (0.12.6 capability / 0.14.0 " +
-      "operational), validates 4 Auth UDP keys in correct TOML sections, runtime port " +
-      "and log inspection.",
+      "Verifies your node won't be disconnected now that v0.14.3 dropped support for " +
+      "non-authenticated UDP at the network level. Two-tier version check (0.12.6 " +
+      "capability / 0.14.0 fully compliant), validates 4 Auth UDP keys in correct TOML " +
+      "sections ([peer_discovery] + [network]), checks UDP 8000+8001 listening, scans " +
+      "monad_wireauth log entries and peer keepalives.",
     highlights: [
-      'Cross-references Foundation Discord 2026-05-06 cutoff',
       'Section-aware TOML key matching ([peer_discovery] / [network])',
-      'Optional --post URL for compliance-tracker integration',
-      'JSON output, --quiet mode for cron',
+      'Validates BOTH UDP 8000 (P2P) and 8001 (Auth UDP) listening',
+      '--post URL pushes JSON to a compliance tracker',
+      '--json / --quiet for cron and CI',
     ],
     rawUrl: `https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/${REPO_BRANCH}/authudp-check/monad-authudp-check`,
     githubUrl: `https://github.com/${REPO_OWNER}/${REPO_NAME}/tree/${REPO_BRANCH}/authudp-check`,
