@@ -87,26 +87,6 @@ const STATIC_SCRIPTS: Omit<ScriptEntry, 'lines' | 'lastCommitSha' | 'lastCommitD
     githubUrl: `https://github.com/${REPO_OWNER}/${REPO_NAME}/tree/${REPO_BRANCH}/validator-setup`,
     installCmd: `git clone https://github.com/${REPO_OWNER}/${REPO_NAME}.git\ncd monad-tools && sudo ./validator-setup/monad-validator-setup`,
   },
-  {
-    name: 'monad-authudp-check',
-    path: 'authudp-check/monad-authudp-check',
-    purpose: 'Auth UDP compliance verification',
-    description:
-      "Verifies your node won't be disconnected now that v0.14.3 dropped support for " +
-      "non-authenticated UDP at the network level. Two-tier version check (0.12.6 " +
-      "capability / 0.14.0 fully compliant), validates 4 Auth UDP keys in correct TOML " +
-      "sections ([peer_discovery] + [network]), checks UDP 8000+8001 listening, scans " +
-      "monad_wireauth log entries and peer keepalives.",
-    highlights: [
-      'Section-aware TOML key matching ([peer_discovery] / [network])',
-      'Validates BOTH UDP 8000 (P2P) and 8001 (Auth UDP) listening',
-      '--post URL pushes JSON to a compliance tracker',
-      '--json / --quiet for cron and CI',
-    ],
-    rawUrl: `https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/${REPO_BRANCH}/authudp-check/monad-authudp-check`,
-    githubUrl: `https://github.com/${REPO_OWNER}/${REPO_NAME}/tree/${REPO_BRANCH}/authudp-check`,
-    installCmd: `curl -fsSL https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/${REPO_BRANCH}/authudp-check/monad-authudp-check | bash`,
-  },
 ];
 
 interface CacheEntry {

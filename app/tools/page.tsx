@@ -28,13 +28,28 @@ const TOOLS: ToolCard[] = [
   {
     emoji: '🩺',
     title: 'Operator Scripts',
-    blurb: 'Pre-flight check, host setup, Auth UDP verifier — all in bash',
+    blurb: 'Pre-flight check + host setup — single-file bash',
     details:
-      "Three single-file bash scripts that take a fresh Ubuntu 24.04 box to a fully-" +
-      "configured Monad validator: monad-doctor (32+ readiness checks), " +
-      "monad-validator-setup (14 idempotent install steps), monad-authudp-check " +
-      "(0.14.3 enforcement compliance). Cross-referenced against docs.monad.xyz.",
+      "Two single-file bash scripts that take a fresh Ubuntu 24.04 box to a fully-" +
+      "configured Monad validator: monad-doctor (50+ readiness checks across hardware, " +
+      "OS, network, security, monad-specific config) and monad-validator-setup " +
+      "(13 idempotent install steps, --network=testnet|mainnet, --node-type=validator|full, " +
+      "--with-monitoring). Cross-referenced against docs.monad.xyz.",
     href: '/tools/scripts',
+  },
+  {
+    emoji: '📊',
+    title: 'Monitoring Stack',
+    blurb: 'Self-hosted Grafana + Prometheus for your Monad validator',
+    details:
+      "Three Docker containers (Prometheus + Grafana + RPC exporter) plus node_exporter " +
+      "that scrape Monad's bundled OpenTelemetry collector on :8889. Renders a 47-panel " +
+      "dashboard: sync, vote delay, consensus events, system resources, disk, network, " +
+      "txpool, raptorcast, errors. Auto-installer handles UFW, chrony, hostmetrics " +
+      "overlay, healthcheck. Loopback-only by default; --public flag exposes Grafana :3000. " +
+      "Install: curl -fsSL https://raw.githubusercontent.com/BeeHiveTeam/monad-grafana/main/install.sh | sudo bash",
+    href: 'https://github.com/BeeHiveTeam/monad-grafana',
+    external: true,
     badge: 'NEW',
   },
 ];
