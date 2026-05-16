@@ -40,16 +40,14 @@ const TOOLS: ToolCard[] = [
   {
     emoji: '📊',
     title: 'Monitoring Stack',
-    blurb: 'Self-hosted Grafana + Prometheus for your Monad validator',
+    blurb: 'Self-hosted Grafana + Prometheus for your Monad node',
     details:
-      "Three Docker containers (Prometheus + Grafana + RPC exporter) plus node_exporter " +
+      "Three Docker containers (Prometheus + Grafana + RPC exporter) plus node-exporter " +
       "that scrape Monad's bundled OpenTelemetry collector on :8889. Renders a 47-panel " +
       "dashboard: sync, vote delay, consensus events, system resources, disk, network, " +
       "txpool, raptorcast, errors. Auto-installer handles UFW, chrony, hostmetrics " +
-      "overlay, healthcheck. Loopback-only by default; --public flag exposes Grafana :3000. " +
-      "Install: curl -fsSL https://raw.githubusercontent.com/BeeHiveTeam/monad-grafana/main/install.sh | sudo bash",
-    href: 'https://github.com/BeeHiveTeam/monad-grafana',
-    external: true,
+      "overlay, healthcheck. Loopback-only by default; --public flag exposes Grafana :3000.",
+    href: '/tools/monitoring',
     badge: 'NEW',
   },
 ];
