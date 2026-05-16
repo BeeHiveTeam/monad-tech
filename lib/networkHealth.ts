@@ -583,6 +583,21 @@ export async function tickValidatorSetTracker(): Promise<void> {
         stakeMon: Number(v.stakeMon ?? 0),
       });
     }
+
+    // Phantom protection: if curr is substantially smaller than prev (>20%
+    // drop in one tick), the validators API likely returned a partial list
+    // due to a registry-warmup race. Skip diff to avoid emitting bulk
+    // "removed" events that are really just transient gaps. Real epoch
+    // transitions remove at most a handful at once.
+    if (S.prevValidatorSet && S.prevValidatorSet.size > 50) {
+      const shrinkPct = (S.prevValidatorSet.size - curr.size) / S.prevValidatorSet.size;
+      if (shrinkPct > 0.20) {
+        // eslint-disable-next-line no-console
+        console.warn(`[valset-tracker] curr=${curr.size} prev=${S.prevValidatorSet.size} (-${(shrinkPct*100).toFixed(1)}%) — likely partial response, skipping diff`);
+        return;
+      }
+    }
+
     // Skip comparison until we have a populated baseline. Seed-only tick.
     if (S.prevValidatorSet && S.prevValidatorSet.size > 0) {
       for (const [addr, prev] of S.prevValidatorSet) {

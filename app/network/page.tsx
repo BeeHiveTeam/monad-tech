@@ -378,7 +378,18 @@ export default function NetworkPage() {
                         {e.type}
                       </span>
                       <span className="col-moniker" style={{ color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
-                        {e.moniker ?? e.address.slice(0, 16) + '…'}
+                        {e.moniker ? (
+                          <a href={`/validators/${e.address}`}
+                             style={{ color: 'var(--text)', textDecoration: 'none' }}>
+                            {e.moniker}
+                          </a>
+                        ) : (
+                          <a href={`/address/${e.address}`}
+                             style={{ color: 'var(--text-muted)', fontFamily: 'DM Mono, monospace', fontSize: 11, textDecoration: 'none' }}
+                             title={e.address}>
+                            {e.address.slice(0, 10) + '…' + e.address.slice(-4)}
+                          </a>
+                        )}
                       </span>
                       <span className="col-delta" style={{ color: 'var(--text-muted)', textAlign: 'right' }}>
                         {e.delta !== undefined ? `Δ ${e.delta.toLocaleString()} MON` : ''}

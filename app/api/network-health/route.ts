@@ -3,6 +3,7 @@ import {
   getReorgState, getClientVersion, getGeoSummary, getSetChanges,
   fetchReorgsFromInflux, fetchSetChangesFromInflux,
 } from '@/lib/networkHealth';
+import { getValidatorInfo } from '@/lib/validator-monikers';
 
 export const dynamic = 'force-dynamic';
 
@@ -92,10 +93,40 @@ export async function GET() {
   const setChangesKey = (e: { ts: number; address: string; type: string }) =>
     `${e.ts}-${e.address}-${e.type}`;
   const setChangesSeen = new Set(setChanges.events.map(setChangesKey));
-  const mergedSetChanges = [
+  const mergedSetChangesRaw = [
     ...setChanges.events,
     ...persistedSetChanges.filter(e => !setChangesSeen.has(setChangesKey(e))),
-  ].sort((a, b) => b.ts - a.ts).slice(0, 100);
+  ].sort((a, b) => b.ts - a.ts);
+
+  // Filter post-restart phantoms. When monad-stats PM2-restarts, the
+  // validator-set detector's first ticks race against /api/validators
+  // returning a "building" partial list — addresses that exist in prev
+  // (from a fully-populated snapshot before restart) but not in curr (the
+  // partial list) get falsely emitted as "removed". These phantoms are
+  // identifiable by all of: type=removed AND no moniker captured AND
+  // oldStake ≤ 0. Real removals carry a positive oldStake from prev.
+  // Also drop "added" events whose paired "removed" was a phantom (same
+  // address re-appearing seconds later when the validators list completes).
+  const phantomAddresses = new Set<string>();
+  for (const e of mergedSetChangesRaw) {
+    if (e.type === 'removed' && !e.moniker && (e.oldStake ?? 0) <= 0) {
+      phantomAddresses.add(e.address);
+    }
+  }
+  const filtered = mergedSetChangesRaw.filter(e => {
+    if (e.type === 'removed' && !e.moniker && (e.oldStake ?? 0) <= 0) return false;
+    if (e.type === 'added' && phantomAddresses.has(e.address) && !e.moniker) return false;
+    return true;
+  });
+
+  // Enrich monikers from the validator registry — surviving events may still
+  // lack moniker if the writer captured prev snapshot before GitHub metadata
+  // loaded. Read-time lookup uses the auth-address keyed registry.
+  const mergedSetChanges = filtered.slice(0, 100).map(e => {
+    if (e.moniker) return e;
+    const info = getValidatorInfo(e.address);
+    return info?.moniker ? { ...e, moniker: info.moniker } : e;
+  });
   const totalSetChangesAllTime = persistedSetChanges.length
     + setChanges.events.filter(e => !persistedSetChanges.some(p => setChangesKey(p) === setChangesKey(e))).length;
 
