@@ -524,11 +524,15 @@ export async function GET() {
     cache = { ts: nowMs, data };
     return NextResponse.json(data);
   } catch (err) {
+    // Log full error server-side so operators can drill in from PM2 logs.
+    // Client gets a generic offline state — no internal paths/URLs leak.
+    // eslint-disable-next-line no-console
+    console.error('[api/node] metrics fetch failed', err);
     return NextResponse.json({
-      error: String(err),
+      error: 'Metrics endpoint unreachable',
       fetchedAt: Date.now(),
       latencyMs: Date.now() - startedAt,
-      health: { state: 'offline', reason: `Metrics endpoint unreachable: ${String(err).slice(0, 120)}` },
+      health: { state: 'offline', reason: 'Metrics endpoint unreachable' },
     }, { status: 503 });
   }
 }

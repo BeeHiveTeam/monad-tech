@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getLatestBlocksBatched } from '@/lib/rpc';
 import { NETWORKS, NetworkId } from '@/lib/networks';
 import { getLatestBlocks as getRingBlocks } from '@/lib/wsBlockStream';
+import { apiError } from '@/lib/apiError';
 
 export const dynamic = 'force-dynamic';
 
@@ -59,6 +60,6 @@ export async function GET(req: NextRequest) {
       headers: { 'Cache-Control': 'public, s-maxage=10, stale-while-revalidate=30' },
     });
   } catch (err) {
-    return NextResponse.json({ error: String(err) }, { status: 500 });
+    return apiError(err, 500, 'blocks');
   }
 }

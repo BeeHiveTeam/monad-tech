@@ -3,6 +3,7 @@ import { NETWORKS, NetworkId } from '@/lib/networks';
 import { getValidatorInfo } from '@/lib/validator-monikers';
 import { ensureRegistryLoaded } from '@/lib/validator-registry';
 import { getLatestBlocks } from '@/lib/wsBlockStream';
+import { apiError } from '@/lib/apiError';
 
 export const dynamic = 'force-dynamic';
 
@@ -40,7 +41,8 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ address: st
 
   try {
     // Make sure registry data is available so validator detection works.
-    await ensureRegistryLoaded(rpcUrl).catch(() => { /* non-fatal */ });
+    // Pass `network` so mainnet lookups don't fall back to the testnet registry.
+    await ensureRegistryLoaded(rpcUrl, network).catch(() => { /* non-fatal */ });
 
     // Three RPC calls in one batch — balance, code, nonce.
     const [balanceHex, codeHex, nonceHex] = await batchRpc(rpcUrl, [
@@ -68,7 +70,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ address: st
     const minedBlocks: { number: number; timestamp: number; txCount: number }[] = [];
     const recentTxs: { hash: string; blockNumber: number; from: string; to: string | null; valueMon: string; direction: 'in' | 'out' | 'self' }[] = [];
 
-    for (const b of ring) {
+    outer: for (const b of ring) {
       if (!b) continue;
       if ((b.miner ?? '').toLowerCase() === addr) {
         minedBlocks.push({
@@ -82,7 +84,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ address: st
           const from = (tx.from ?? '').toLowerCase();
           const to = (tx.to ?? '').toLowerCase();
           if (from !== addr && to !== addr) continue;
-          if (recentTxs.length >= 50) break;
+          if (recentTxs.length >= 50) break outer;
           const valBI = tx.value && HEX.test(tx.value) ? BigInt(tx.value) : BigInt(0);
           recentTxs.push({
             hash: tx.hash,
@@ -123,7 +125,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ address: st
       fetchedAt: Date.now(),
     });
   } catch (err) {
-    return NextResponse.json({ error: String(err), address: addr }, { status: 500 });
+    return apiError(err, 500, `address/${addr}`);
   }
 }
 

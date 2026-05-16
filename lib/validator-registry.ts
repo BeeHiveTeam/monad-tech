@@ -35,9 +35,12 @@ const _lastFetch: Map<NetworkId, number> = new Map();
 const REGISTRY_TTL_MS = 60 * 60_000; // 1 hour
 
 async function fetchGithubValidators(): Promise<GithubValidatorInfo[]> {
+  // Hard timeouts so a GitHub stall doesn't pin ensureRegistryLoaded callers
+  // (which propagates to /api/validators, /api/address/[address], etc.) forever.
   const res = await fetch(GITHUB_API, {
     headers: { 'User-Agent': 'monad-stats-dashboard' },
     next: { revalidate: 3600 },
+    signal: AbortSignal.timeout(10_000),
   });
   if (!res.ok) throw new Error(`GitHub API ${res.status}`);
   const files = await res.json() as { name: string; download_url: string }[];
@@ -47,7 +50,9 @@ async function fetchGithubValidators(): Promise<GithubValidatorInfo[]> {
   for (let i = 0; i < files.length; i += batchSize) {
     const batch = files.slice(i, i + batchSize);
     const results = await Promise.allSettled(
-      batch.map(f => fetch(f.download_url).then(r => r.json() as Promise<GithubValidatorInfo>))
+      batch.map(f => fetch(f.download_url, {
+        signal: AbortSignal.timeout(8_000),
+      }).then(r => r.json() as Promise<GithubValidatorInfo>))
     );
     for (const r of results) {
       if (r.status === 'fulfilled' && r.value?.id != null && r.value?.name) {

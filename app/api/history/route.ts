@@ -120,6 +120,9 @@ export async function GET(req: NextRequest) {
 
     return NextResponse.json({ points, range: effectiveRange });
   } catch (err) {
-    return NextResponse.json({ points: [], range, error: String(err) });
+    // Graceful degrade: chart renders empty rather than throwing.
+    // eslint-disable-next-line no-console
+    console.error('[api/history] InfluxDB query failed', err);
+    return NextResponse.json({ points: [], range });
   }
 }

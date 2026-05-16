@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { apiError } from '@/lib/apiError';
 import { getIncidentFeedCached, Severity } from '@/lib/incidents';
 
 export const dynamic = 'force-dynamic';
@@ -23,6 +24,6 @@ export async function GET(req: NextRequest) {
       headers: { 'Cache-Control': 'public, s-maxage=20, stale-while-revalidate=60' },
     });
   } catch (err) {
-    return NextResponse.json({ error: String(err) }, { status: 500 });
+    return apiError(err, 500, 'incidents');
   }
 }

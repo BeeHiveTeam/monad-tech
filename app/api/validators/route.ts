@@ -344,7 +344,7 @@ export async function GET(req: NextRequest) {
   return NextResponse.json({
     network,
     building: true,
-    message: 'Collecting validator sample (5000 blocks, ~2-3 min on cold start)…',
+    message: `Collecting validator sample (${SAMPLE_BLOCKS} blocks, ~30s on cold start)…`,
     validators: [],
     totalValidators: 0,
     sampleSize: 0,

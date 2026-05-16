@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { apiError } from '@/lib/apiError';
 import { getTopContractsCached, fetchTopContractsFromInflux, WINDOW_DEFAULT_MIN } from '@/lib/topContracts';
 import { NETWORKS, NetworkId } from '@/lib/networks';
 
@@ -58,6 +59,6 @@ export async function GET(req: NextRequest) {
       headers: { 'Cache-Control': 'public, s-maxage=30, stale-while-revalidate=60' },
     });
   } catch (err) {
-    return NextResponse.json({ error: String(err) }, { status: 500 });
+    return apiError(err, 500, 'top-contracts');
   }
 }

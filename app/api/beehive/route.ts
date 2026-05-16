@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { apiError } from '@/lib/apiError';
 import { parsePrometheus, findOne } from '@/lib/prom-parser';
 
 export const dynamic = 'force-dynamic';
@@ -102,6 +103,6 @@ export async function GET() {
       headers: { 'Cache-Control': 'public, s-maxage=10, stale-while-revalidate=30' },
     });
   } catch (err) {
-    return NextResponse.json({ error: String(err) }, { status: 500 });
+    return apiError(err, 500, 'beehive');
   }
 }

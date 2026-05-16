@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { apiError } from '@/lib/apiError';
 import { getLatestBlocksBatched } from '@/lib/rpc';
 import { getValidatorInfo } from '@/lib/validator-monikers';
 import { ensureRegistryLoaded, getRegistryEntries, getConsensusIds, getChainDataById } from '@/lib/validator-registry';
@@ -215,6 +216,6 @@ export async function GET(
     cache.set(cacheKey, { ts: Date.now(), data });
     return NextResponse.json(data);
   } catch (err) {
-    return NextResponse.json({ error: String(err), address: addr }, { status: 500 });
+    return apiError(err, 500, `validators/${addr}`);
   }
 }

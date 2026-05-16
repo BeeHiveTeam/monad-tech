@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { apiError } from '@/lib/apiError';
 
 export const dynamic = 'force-dynamic';
 
@@ -98,6 +99,6 @@ export async function GET(req: NextRequest) {
       note: 'Timestamps derived from 10s polling of Prometheus counter — resolution ≈ 10s. For raw log text, enable a journald HTTP endpoint on the validator.',
     });
   } catch (err) {
-    return NextResponse.json({ error: String(err) }, { status: 502 });
+    return apiError(err, 502, 'node/event-timeline');
   }
 }

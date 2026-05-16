@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { apiError } from '@/lib/apiError';
 import { getGasPrice, getLatestBlocksBatched } from '@/lib/rpc';
 import { getTipNumber } from '@/lib/tipCache';
 import { NETWORKS, NetworkId } from '@/lib/networks';
@@ -186,6 +187,6 @@ export async function GET(req: NextRequest) {
       source: ringSource ? 'ws-ring' : 'rpc-fallback',
     });
   } catch (err) {
-    return NextResponse.json({ error: String(err) }, { status: 500 });
+    return apiError(err, 500, 'stats');
   }
 }
