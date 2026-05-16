@@ -33,6 +33,8 @@ interface NetworkHealth {
   validatorSetChanges: {
     events: Array<{ ts: number; type: string; address: string; moniker?: string; oldStake?: number; newStake?: number }>;
     tracked: number;
+    totalDetected?: number;
+    historyWindowDays?: number;
   };
 }
 

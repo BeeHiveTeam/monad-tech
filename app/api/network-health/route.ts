@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import {
   getReorgState, getClientVersion, getGeoSummary, getSetChanges,
-  fetchReorgsFromInflux,
+  fetchReorgsFromInflux, fetchSetChangesFromInflux,
 } from '@/lib/networkHealth';
 
 export const dynamic = 'force-dynamic';
@@ -83,6 +83,22 @@ export async function GET() {
   ].sort((a, b) => b.ts - a.ts).slice(0, 50);
   const totalDetectedAllTime = persistedReorgs.length + reorg.events.filter(e => !persistedReorgs.some(p => p.ts === e.ts && p.blockNumber === e.blockNumber)).length;
 
+  // Same merge pattern for validator-set changes — detector ring resets on
+  // PM2 restart so without InfluxDB merge the section renders empty for the
+  // first hour or two after every deploy, even though events are persisted.
+  // Dedupe by (ts, address, type) since type adds disambiguation when the
+  // same address has two events at the same millisecond (added + removed).
+  const persistedSetChanges = (await fetchSetChangesFromInflux(30 * 86400)) ?? [];
+  const setChangesKey = (e: { ts: number; address: string; type: string }) =>
+    `${e.ts}-${e.address}-${e.type}`;
+  const setChangesSeen = new Set(setChanges.events.map(setChangesKey));
+  const mergedSetChanges = [
+    ...setChanges.events,
+    ...persistedSetChanges.filter(e => !setChangesSeen.has(setChangesKey(e))),
+  ].sort((a, b) => b.ts - a.ts).slice(0, 100);
+  const totalSetChangesAllTime = persistedSetChanges.length
+    + setChanges.events.filter(e => !persistedSetChanges.some(p => setChangesKey(p) === setChangesKey(e))).length;
+
   return NextResponse.json({
     fetchedAt: Date.now(),
     decentralization: {
@@ -125,9 +141,11 @@ export async function GET() {
       note: 'Geo data is refreshed every 30 min from peer keepalive logs; initial refresh may still be pending.',
     },
     validatorSetChanges: {
-      events: setChanges.events,
+      events: mergedSetChanges,
       tracked: setChanges.tracked,
-      note: 'Monad testnet does not expose slashing events directly. Any stake decrease ≥1000 MON or validator removal is surfaced here.',
+      totalDetected: totalSetChangesAllTime,
+      historyWindowDays: 30,
+      note: 'Monad testnet does not expose slashing events directly. Any stake decrease ≥1000 MON or validator removal is surfaced here. In-memory ring (since service restart) merged with persisted history from InfluxDB (last 30 days).',
     },
   });
 }

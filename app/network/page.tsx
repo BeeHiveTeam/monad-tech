@@ -49,6 +49,8 @@ interface NetworkHealth {
   validatorSetChanges: {
     events: Array<{ ts: number; type: string; address: string; moniker?: string; oldStake?: number; newStake?: number; delta?: number }>;
     tracked: number;
+    totalDetected?: number;
+    historyWindowDays?: number;
   };
 }
 
@@ -357,8 +359,8 @@ export default function NetworkPage() {
             <Section
               title="VALIDATOR SET CHANGES"
               subtitle={d.validatorSetChanges.events.length === 0
-                ? `Tracking ${d.validatorSetChanges.tracked} validators. No changes observed since service start.`
-                : `Stake decreases ≥1000 MON, removals, and additions since service start.`}
+                ? `Tracking ${d.validatorSetChanges.tracked} validators. No changes observed in the last ${d.validatorSetChanges.historyWindowDays ?? 30} days.`
+                : `${d.validatorSetChanges.events.length} of ${d.validatorSetChanges.totalDetected ?? d.validatorSetChanges.events.length} events shown — stake decreases ≥1000 MON, removals, and additions over last ${d.validatorSetChanges.historyWindowDays ?? 30} days.`}
             >
               {d.validatorSetChanges.events.length === 0 ? (
                 <div style={{ padding: '10px', fontSize: 11, color: 'var(--text-muted)', border: '1px dashed rgba(201,168,76,0.1)', borderRadius: 4 }}>
