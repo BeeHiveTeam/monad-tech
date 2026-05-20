@@ -217,6 +217,15 @@ function ValidatorList({ title, color, empty, rows }: { title: string; color: st
               </div>
               <div style={{ textAlign: 'right', fontFamily: 'DM Mono, monospace', fontSize: 11 }}>
                 {fmtStake(r.snapshotStakeMon)} MON
+                {/* L1 fix: when snapshot=0 but active>0, the validator isn't
+                    being slashed/unbonded — they just dropped below threshold
+                    for the next active set. Surfacing the active stake makes
+                    the rotation reason readable. */}
+                {r.snapshotStakeMon === 0 && r.activeStakeMon > 0 && (
+                  <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>
+                    snapshot 0 · active {fmtStake(r.activeStakeMon)}
+                  </div>
+                )}
               </div>
             </div>
           ))}

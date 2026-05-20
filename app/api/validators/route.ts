@@ -271,7 +271,17 @@ async function computeValidators(network: NetworkId) {
   //                             `totalValidators`). Kept for backwards-compat.
   const producersInWindow = validators.filter(v => v.blocksProduced > 0).length;
   const activeOperators = validators.filter(v => v.isActiveSet).length;
-  const activeValidators = useCanonicalSet ? consensusIds.size : activeOperators;
+  // Audit-pass M1 fix: previously reported `consensusIds.size` (e.g. 200 on
+  // mainnet) but on mainnet the precompile is in a partial-rollout state —
+  // only 135 of 200 consensus IDs return data from getValidator(). UI showed
+  // "200 active" but table had 135 rows. Now report IDs that are BOTH in the
+  // consensus set AND have on-chain data. consensusSetSize is exposed
+  // separately for the canonical claimed size.
+  const activeIdsWithData = useCanonicalSet
+    ? [...consensusIds].filter(id => chainData.has(id)).length
+    : 0;
+  const activeValidators = useCanonicalSet ? activeIdsWithData : activeOperators;
+  const consensusSetPartial = useCanonicalSet && activeIdsWithData < consensusIds.size;
   const registeredCount = getRegistryEntries(network).length;
 
   return {
@@ -280,6 +290,8 @@ async function computeValidators(network: NetworkId) {
     activeValidators,
     activeOperators,                                // distinct authAddresses (≤ activeValidators)
     consensusSetSize: consensusIds.size,            // canonical (0 = falling back to stake threshold)
+    activeIdsWithData,                              // IDs that are in consensus AND have decoded chain data
+    consensusSetPartial,                            // true when activeIdsWithData < consensusSetSize (mainnet rollout)
     activeSetSource: useCanonicalSet ? 'consensus-precompile' : 'stake-threshold-fallback',
     producersInWindow,
     registeredCount,

@@ -27,6 +27,9 @@ interface ValidatorDetail {
     commissionPct?: number;
   } | null;
   compositeScore?: CompositeScore;
+  stakeMon?: number;              // auth-rolled stake across all owned IDs
+  validatorIds?: number[];        // all IDs owned by this auth
+  activeValidatorIdsCount?: number;
   stats: {
     health: Health;
     score: number;
@@ -222,19 +225,31 @@ export default function ValidatorDetailPage() {
               {/* Composite 6-axis radar */}
               {data.compositeScore && <CompositeScoreCard score={data.compositeScore} />}
 
-              {/* Stats row */}
+              {/* Stats row — STAKE shows AUTH-ROLLED total (across all owned validatorIds),
+                  with sub-line noting per-ID + count when multi-ID. Pre-fix [[H2]]:
+                  showed per-ID stake (25M) alongside auth-rolled participation %
+                  (denom 102M), making the % impossible to reproduce from displayed inputs. */}
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 10, marginBottom: 16 }}>
-                {[
-                  { label: 'Stake', value: formatStake(data.info?.stakeMon) },
-                  { label: 'Commission', value: formatCommission(data.info?.commissionPct) },
-                  { label: 'Blocks produced', value: data.stats.blocksProduced.toLocaleString('en-US') },
-                  { label: 'Block share', value: `${data.stats.sharePct.toFixed(2)}%` },
-                  { label: 'Participation', value: `${Math.min(data.stats.participationPct, 100).toFixed(0)}%`,
-                    sub: data.stats.participationPct > 100 ? `raw ${data.stats.participationPct.toFixed(0)}% (high stake)` : undefined },
-                  { label: 'Total txs', value: data.stats.totalTxs.toLocaleString('en-US') },
-                  { label: 'Sample size', value: `${data.context.sampleSize.toLocaleString()} blocks` },
-                  { label: 'Producers in window', value: data.context.producersInWindow.toString() },
-                ].map(s => (
+                {(() => {
+                  const idCount = data.validatorIds?.length ?? 0;
+                  const isMultiId = idCount > 1;
+                  const authStake = data.stakeMon ?? data.info?.stakeMon;
+                  const perIdStake = data.info?.stakeMon;
+                  const stakeSub = isMultiId && perIdStake != null
+                    ? `${formatStake(perIdStake)} × ${idCount} IDs [${data.validatorIds?.join(', ')}]`
+                    : undefined;
+                  return [
+                    { label: isMultiId ? 'Auth Stake' : 'Stake', value: formatStake(authStake), sub: stakeSub },
+                    { label: 'Commission', value: formatCommission(data.info?.commissionPct) },
+                    { label: 'Blocks produced', value: data.stats.blocksProduced.toLocaleString('en-US') },
+                    { label: 'Block share', value: `${data.stats.sharePct.toFixed(2)}%` },
+                    { label: 'Participation', value: `${Math.min(data.stats.participationPct, 100).toFixed(0)}%`,
+                      sub: data.stats.participationPct > 100 ? `raw ${data.stats.participationPct.toFixed(0)}% (high stake)` : undefined },
+                    { label: 'Total txs', value: data.stats.totalTxs.toLocaleString('en-US') },
+                    { label: 'Sample size', value: `${data.context.sampleSize.toLocaleString()} blocks` },
+                    { label: 'Producers in window', value: data.context.producersInWindow.toString() },
+                  ];
+                })().map(s => (
                   <div key={s.label} className="card" style={{ padding: '14px 18px' }}>
                     <div style={{ fontSize: 10, color: 'var(--text-muted)', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 4 }}>{s.label}</div>
                     <div style={{ fontFamily: 'Bebas Neue, sans-serif', fontSize: 20, color: 'var(--gold)', letterSpacing: '0.04em' }}>{s.value}</div>

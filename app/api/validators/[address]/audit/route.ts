@@ -14,6 +14,14 @@ const SCAN_RANGE_BLOCKS = 100_000; // ~11 hours at 0.4s blocks — adjust if RPC
 const MAX_WINDOW_BLOCKS = 100_000; // hard cap — previously 500K, dropped to respect [[monad-rpc-pacing]]
 const CHUNK_SIZE = 1000;
 const CHUNK_PAUSE_MS = 200; // [[monad-rpc-pacing]] rule — minimum gap between eth_getLogs chunks
+// Hard cap on logs to fetch. Independent of `limit` (display slice). 5000 is
+// plenty for 100K-block window even at 100% production rate (would be 100k×rate
+// = a few thousand). Audit-pass M2 fix: previous `limit*2` early-break tied
+// scan range to display limit, causing summary.totalRewardsMon to undercount
+// for active validators (Category Labs: 1004 events fetched but only ~22K of
+// the requested 100K blocks scanned). Summary now reliably covers the full
+// requested window unless this hard cap fires.
+const HARD_FETCH_CAP = 5000;
 const ADDRESS_RE = /^0x[a-f0-9]{40}$/;
 
 // In-memory cache keyed by (network, address, windowBlocks, limit, format).
@@ -255,14 +263,21 @@ export async function GET(
     // pause (single curl shouldn't pay a 200ms latency floor for nothing).
     const allLogs: RewardLog[] = [];
     let firstChunk = true;
+    let summaryComplete = true;
+    let lastScannedBlock = fromBlock;
     for (let from = fromBlock; from <= tip; from += CHUNK_SIZE) {
       if (!firstChunk) await new Promise(r => setTimeout(r, CHUNK_PAUSE_MS));
       firstChunk = false;
       const to = Math.min(from + CHUNK_SIZE - 1, tip);
       const logs = await fetchLogChunk(rpcUrl, ownedValidatorIds, from, to);
       allLogs.push(...logs);
-      if (allLogs.length >= limit * 2) break; // safety
+      lastScannedBlock = to;
+      if (allLogs.length >= HARD_FETCH_CAP) {
+        summaryComplete = false;
+        break;
+      }
     }
+    const scannedBlocks = lastScannedBlock - fromBlock + 1;
 
     // Sort by block descending
     allLogs.sort((a, b) => b.blockNumber - a.blockNumber);
@@ -288,13 +303,19 @@ export async function GET(
       reason: `Block reward for producing block ${log.blockNumber} (epoch ${log.epoch})`,
     }));
 
-    // Summary
+    // Summary. `windowBlocks` is the *requested* window from the user, while
+    // `scannedBlocks` is what we actually got through before hitting HARD_FETCH_CAP.
+    // `summaryComplete: false` signals the UI to render a partial-data badge.
+    // Pre-fix [[audit M2]] tied this to display `limit*2` which silently truncated
+    // totalRewardsMon for active validators.
     const totalWei = allLogs.reduce((s, l) => s + l.amount, BigInt(0));
     const summary = {
       totalRewardsMon: formatMon(totalWei),
       rewardCount: allLogs.length,
       blocksProduced: allLogs.length, // 1 reward per block produced
       windowBlocks: tip - fromBlock,
+      scannedBlocks,
+      summaryComplete,
       firstRewardBlock: allLogs.length ? allLogs[allLogs.length - 1].blockNumber : null,
       lastRewardBlock: allLogs.length ? allLogs[0].blockNumber : null,
     };

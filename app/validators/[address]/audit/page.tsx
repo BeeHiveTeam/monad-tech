@@ -30,6 +30,8 @@ interface AuditResponse {
     rewardCount: number;
     blocksProduced: number;
     windowBlocks: number;
+    scannedBlocks?: number;
+    summaryComplete?: boolean;
     firstRewardBlock: number | null;
     lastRewardBlock: number | null;
   };
@@ -148,6 +150,31 @@ export default function ValidatorAuditPage() {
                 <SummaryCard label="Commission" value={data.commissionPct != null ? `${data.commissionPct}%` : '—'} />
                 <SummaryCard label="Window" value={`${(data.summary.windowBlocks / 1000).toFixed(0)}K blocks`} />
               </div>
+
+              {/* Partial-scan banner (M2): scan hit HARD_FETCH_CAP, summary
+                  covers only `scannedBlocks` of the requested `windowBlocks`. */}
+              {data.summary.summaryComplete === false && data.summary.scannedBlocks && (
+                <div className="card" style={{ padding: '10px 14px', marginBottom: 12, border: '1px solid var(--gold-dim)', background: 'rgba(201,168,76,0.06)' }}>
+                  <div style={{ fontSize: 11, color: 'var(--gold)', letterSpacing: '0.04em' }}>
+                    ⚠ Partial scan — high reward volume hit the 5,000-event cap. Summary covers the most recent <strong>{(data.summary.scannedBlocks / 1000).toFixed(0)}K of {(data.summary.windowBlocks / 1000).toFixed(0)}K</strong> requested blocks. Narrow the window for a complete view, or use CSV export which streams the same partial set.
+                  </div>
+                </div>
+              )}
+
+              {/* Stale-data warning (M3): when most-recent reward is far from
+                  the audit query time, flag that the validator may be inactive. */}
+              {data.rewards.length > 0 && data.rewards[0].timestamp && (() => {
+                const ageSec = data.fetchedAt / 1000 - data.rewards[0].timestamp;
+                if (ageSec < 3600) return null;
+                const hours = Math.floor(ageSec / 3600);
+                return (
+                  <div className="card" style={{ padding: '10px 14px', marginBottom: 12, border: '1px solid #E0525266', background: 'rgba(224,82,82,0.06)' }}>
+                    <div style={{ fontSize: 11, color: '#E05252', letterSpacing: '0.04em' }}>
+                      ⚠ Latest reward is <strong>{hours}h old</strong> (block {data.rewards[0].blockNumber.toLocaleString()}). Validator may be inactive, missing the active set, or producing very rarely. The reward ledger below is correct but not current.
+                    </div>
+                  </div>
+                );
+              })()}
 
               {/* Window selector */}
               <div className="card" style={{ padding: '12px 16px', marginBottom: 16, fontSize: 12 }}>

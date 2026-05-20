@@ -4,65 +4,51 @@ import {
   fetchReorgsFromInflux, fetchSetChangesFromInflux,
 } from '@/lib/networkHealth';
 import { getValidatorInfo } from '@/lib/validator-monikers';
+import { ensureRegistryLoaded, getChainDataById, getConsensusIds } from '@/lib/validator-registry';
+import { operatorRollup, nakamotoCoefficient } from '@/lib/concentration';
+import { NETWORKS } from '@/lib/networks';
 
 export const dynamic = 'force-dynamic';
 
-interface ValidatorRow { address: string; moniker?: string; stakeMon?: number; }
-
-// Nakamoto coefficient for a BFT chain. The relevant threshold for BFT
-// safety/liveness is the minimum number of validators whose combined stake
-// exceeds `threshold` of total. 1/3 halts liveness, 2/3 controls safety.
-function nakamoto(sorted: number[], threshold: number): { n: number; cumPct: number } {
-  const total = sorted.reduce((s, v) => s + v, 0);
-  if (total === 0) return { n: 0, cumPct: 0 };
-  let cum = 0;
-  for (let i = 0; i < sorted.length; i++) {
-    cum += sorted[i];
-    if (cum > total * threshold) {
-      return { n: i + 1, cumPct: (cum / total) * 100 };
-    }
-  }
-  return { n: sorted.length, cumPct: 100 };
-}
-
 export async function GET() {
-  // Fetch current validator set from our own API for stake distribution.
-  // Endpoint returns `{ validators: [...] }` wrapper, not a raw array.
-  const base = process.env.SELF_URL ?? 'http://127.0.0.1:3001';
-  let validators: ValidatorRow[] = [];
-  try {
-    const r = await fetch(`${base}/api/validators`, { signal: AbortSignal.timeout(8_000), cache: 'no-store' });
-    if (r.ok) {
-      const body = await r.json() as { validators?: ValidatorRow[] } | ValidatorRow[];
-      validators = Array.isArray(body) ? body : (body.validators ?? []);
-    }
-  } catch { /* fall through with empty list */ }
+  // Source stake-distribution data DIRECTLY from the registry so we share the
+  // canonical operator-rollup math with /api/network/concentration. Pre-fix
+  // [[feedback_nakamoto_two_denominators]]: network-health computed Nakamoto
+  // inline over 281 validator IDs (auth-deduped) including inactive registered
+  // stake, while concentration computed it over 195 operators in the canonical
+  // consensus set. Two cards on two pages displayed different numbers for the
+  // same metric. Now both call operatorRollup/nakamotoCoefficient from lib/concentration.ts.
+  const rpcUrl = process.env.MONAD_RPC_URL ?? NETWORKS['testnet'].rpc;
+  await ensureRegistryLoaded(rpcUrl, 'testnet');
+  const chainData = getChainDataById('testnet');
+  const consensusIds = getConsensusIds('testnet');
 
-  const stakes = validators
-    .map(v => Number(v.stakeMon ?? 0))
-    .filter(n => Number.isFinite(n) && n > 0)
-    .sort((a, b) => b - a);
-  const totalStake = stakes.reduce((s, v) => s + v, 0);
+  const { operators, totalStake } = operatorRollup(
+    chainData,
+    consensusIds,
+    (addr) => getValidatorInfo(addr, 'testnet')?.moniker ?? null,
+  );
+  const stakes = operators.map(o => o.stakeMon).sort((a, b) => b - a);
 
-  const n33 = nakamoto(stakes, 1 / 3);
-  const n50 = nakamoto(stakes, 1 / 2);
-  const n66 = nakamoto(stakes, 2 / 3);
+  const n33 = nakamotoCoefficient(stakes, 1 / 3);
+  const n50 = nakamotoCoefficient(stakes, 1 / 2);
+  const n66 = nakamotoCoefficient(stakes, 2 / 3);
 
-  // Top-10 stake share
+  // Top-10 stake share (now operator-based, not validator-ID-based)
   const top10 = stakes.slice(0, 10);
   const top10Pct = totalStake > 0 ? (top10.reduce((s, v) => s + v, 0) / totalStake) * 100 : 0;
 
-  // Top stakers with moniker (sorted by stake)
-  const topValidators = [...validators]
-    .filter(v => Number(v.stakeMon ?? 0) > 0)
-    .sort((a, b) => Number(b.stakeMon ?? 0) - Number(a.stakeMon ?? 0))
-    .slice(0, 10)
-    .map(v => ({
-      address: v.address,
-      moniker: v.moniker ?? null,
-      stakeMon: Number(v.stakeMon ?? 0),
-      sharePct: totalStake > 0 ? (Number(v.stakeMon ?? 0) / totalStake) * 100 : 0,
-    }));
+  // Top stakers with moniker — direct from operatorRollup output, no second sort
+  const topValidators = operators.slice(0, 10).map(op => ({
+    address: op.authAddress,
+    moniker: op.moniker,
+    stakeMon: op.stakeMon,
+    sharePct: op.sharePct,
+  }));
+
+  // Snapshot of the validators list size for the existing fields below.
+  const activeOperatorCount = operators.length;
+  const totalChainIds = chainData.size;
 
   const version = await getClientVersion();
   const reorg = getReorgState();
@@ -133,16 +119,22 @@ export async function GET() {
   return NextResponse.json({
     fetchedAt: Date.now(),
     decentralization: {
-      totalValidators: validators.length,
-      activeValidators: stakes.length,
+      // `totalValidators` = all registered chain-data IDs (active + inactive).
+      // `activeValidators` = distinct OPERATORS in the canonical consensus set
+      // (operator-rolled, not raw ID count). Matches /api/network/concentration.
+      totalValidators: totalChainIds,
+      activeValidators: activeOperatorCount,
       totalStakeMon: totalStake,
       nakamoto: {
-        threshold33: n33,  // min validators to halt liveness (BFT: >1/3)
+        // Operator-based; matches /api/network/concentration exactly.
+        // Min operators to halt liveness (>1/3) / control safety (>2/3).
+        threshold33: n33,
         threshold50: n50,
-        threshold66: n66,  // min validators to control safety (BFT: >2/3)
+        threshold66: n66,
       },
       top10SharePct: top10Pct,
       topValidators,
+      methodologyNote: 'Operator-based metrics: validator IDs sharing an authAddress are rolled up into a single operator. Stake counted only for IDs in the canonical consensus set (snapshotStake-gated active set).',
     },
     clientVersion: {
       rpc: version.rpc,                // public RPC gateway version
