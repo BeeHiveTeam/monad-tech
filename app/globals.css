@@ -210,11 +210,34 @@ tr:hover td { background: rgba(201,168,76,0.03); }
     min-height: 40px;
   }
   /* Horizontal scroll for tables that don't fit — keep them tabular instead
-     of collapsing into unreadable stacks */
+     of collapsing into unreadable stacks. The right-side fade-mask hints
+     that more columns exist off-screen (audit C4 — without this users on
+     390px viewports didn't realise the SCORE/HEALTH/UPTIME columns were
+     scrollable, only saw ADDRESS and assumed the rest was missing). */
   .card > div:has(> table),
   .card > .table-scroll {
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;
+    -webkit-mask-image: linear-gradient(to right, black 90%, transparent 100%);
+            mask-image: linear-gradient(to right, black 90%, transparent 100%);
+  }
+  /* Hint badge: a small "→" emoji floats over the right edge to make the
+     scroll affordance discoverable. Hidden when there's nothing to scroll
+     (handled inside JS would be ideal, but pure CSS sniff via scrollbar
+     pseudo doesn't work; this is good enough). */
+  .card > div:has(> table)::after,
+  .card > .table-scroll::after {
+    content: '› SCROLL ›';
+    position: sticky; right: 0; top: 0;
+    display: block;
+    width: max-content; margin-left: auto;
+    padding: 2px 6px;
+    font-size: 9px; letter-spacing: 0.08em;
+    color: var(--gold-dim);
+    background: rgba(15,15,15,0.85);
+    border-radius: 0 0 0 4px;
+    pointer-events: none;
+    opacity: 0.5;
   }
   /* Chart heights trimmed on small screens */
   .recharts-responsive-container { max-height: 220px !important; }

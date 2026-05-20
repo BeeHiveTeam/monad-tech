@@ -355,10 +355,14 @@ export function computeCompositeScore(input: CompositeScoreInput): CompositeScor
   // 4. Decentralization — penalises whale concentration. stakeShare 0% → 100,
   //    1% → 90, 5% → 50, 10%+ → 10 (asymptote, never 0 — even huge validators
   //    contribute some baseline security). Inactive/no-stake validators score
-  //    100 (they contribute nothing to centralisation risk).
+  //    neutral 50 (consistent with Production/Returns missing-data treatment);
+  //    they don't contribute centralisation risk but also don't contribute
+  //    decentralisation evidence. Pre-fix this returned 100 for inactive
+  //    validators, artificially inflating composite scores for brand-new or
+  //    de-registered validators — fixed per audit H5.
   let decentralization: number;
   if (!input.isActiveSet || !input.stakeMon || input.totalActiveStake <= 0) {
-    decentralization = 100;
+    decentralization = 50;
   } else {
     const sharePct = (input.stakeMon / input.totalActiveStake) * 100;
     // 0%→100, 1%→90, 2%→80, 5%→50, 10%→0 (clamped)
@@ -386,6 +390,19 @@ export function computeCompositeScore(input: CompositeScoreInput): CompositeScor
   if (input.hasLogo)        infoScore += 20;
   if (input.hasSocial)      infoScore += 15;
 
+  // Compute composite from RAW (pre-rounding) values, then round once at end.
+  // Rounding axes first compounded error up to ±3 score points across 6 axes —
+  // fixed per audit H4. The displayed axes are still ints (UI doesn't show
+  // fractions), but the composite is now mathematically faithful.
+  const composite = Math.round(
+    reliability      * COMPOSITE_WEIGHTS.reliability +
+    production       * COMPOSITE_WEIGHTS.production +
+    returns          * COMPOSITE_WEIGHTS.returns +
+    decentralization * COMPOSITE_WEIGHTS.decentralization +
+    opsMaturity      * COMPOSITE_WEIGHTS.opsMaturity +
+    infoScore        * COMPOSITE_WEIGHTS.infoScore
+  );
+
   const axes = {
     reliability: Math.round(reliability),
     production: Math.round(production),
@@ -394,15 +411,6 @@ export function computeCompositeScore(input: CompositeScoreInput): CompositeScor
     opsMaturity: Math.round(opsMaturity),
     infoScore: Math.round(infoScore),
   };
-
-  const composite = Math.round(
-    axes.reliability * COMPOSITE_WEIGHTS.reliability +
-    axes.production * COMPOSITE_WEIGHTS.production +
-    axes.returns * COMPOSITE_WEIGHTS.returns +
-    axes.decentralization * COMPOSITE_WEIGHTS.decentralization +
-    axes.opsMaturity * COMPOSITE_WEIGHTS.opsMaturity +
-    axes.infoScore * COMPOSITE_WEIGHTS.infoScore
-  );
 
   return { composite, axes };
 }

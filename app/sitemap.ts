@@ -40,5 +40,41 @@ export default function sitemap(): MetadataRoute.Sitemap {
       changeFrequency: 'daily',
       priority: 0.7,
     },
+    {
+      url: `${BASE_URL}/network/concentration`,
+      lastModified: now,
+      changeFrequency: 'hourly',
+      priority: 0.8,
+    },
+    {
+      url: `${BASE_URL}/validators/compare`,
+      lastModified: now,
+      changeFrequency: 'weekly',
+      priority: 0.6,
+    },
+    {
+      url: `${BASE_URL}/tools`,
+      lastModified: now,
+      changeFrequency: 'weekly',
+      priority: 0.6,
+    },
+    {
+      url: `${BASE_URL}/tools/rpcs`,
+      lastModified: now,
+      changeFrequency: 'hourly',
+      priority: 0.7,
+    },
+    {
+      url: `${BASE_URL}/tools/scripts`,
+      lastModified: now,
+      changeFrequency: 'weekly',
+      priority: 0.5,
+    },
+    {
+      url: `${BASE_URL}/tools/monitoring`,
+      lastModified: now,
+      changeFrequency: 'weekly',
+      priority: 0.5,
+    },
   ];
 }

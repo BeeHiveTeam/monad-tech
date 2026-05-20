@@ -30,8 +30,9 @@ export default function SiteHeader({ network, onNetworkChange, liveState = 'live
       borderBottom: '1px solid var(--border)',
       flexWrap: 'wrap', gap: 12,
     }}>
-      <Link href="/" className="site-logo" style={{ textDecoration: 'none', display: 'flex', alignItems: 'center', gap: 14 }}>
-        <svg className="site-logo-svg" width="36" height="36" viewBox="0 0 100 100">
+      <Link href="/" className="site-logo" aria-label="Monad Tech home" style={{ textDecoration: 'none', display: 'flex', alignItems: 'center', gap: 14 }}>
+        <svg className="site-logo-svg" width="36" height="36" viewBox="0 0 100 100" role="img" aria-label="Monad Tech logo">
+          <title>Monad Tech</title>
           <rect width="100" height="100" fill="#090907" />
           <polygon points="50,8 88,30 88,70 50,92 12,70 12,30" fill="none" stroke="#C9A84C" strokeWidth="6" />
           <text x="50" y="68" textAnchor="middle" fontFamily="Arial Black,sans-serif" fontSize="38" fontWeight="900" fill="#C9A84C">M</text>

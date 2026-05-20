@@ -59,11 +59,13 @@ export default function ValidatorAuditPage() {
 
   useEffect(() => {
     if (!address) return;
+    const ctrl = new AbortController();
     setLoading(true);
-    fetch(`/api/validators/${address}/audit?network=${network}&windowBlocks=${windowBlocks}&limit=500`)
+    fetch(`/api/validators/${address}/audit?network=${network}&windowBlocks=${windowBlocks}&limit=500`, { signal: ctrl.signal })
       .then(r => r.json())
       .then(d => { setData(d); setLoading(false); })
-      .catch(() => setLoading(false));
+      .catch(e => { if (e?.name !== 'AbortError') setLoading(false); });
+    return () => ctrl.abort();
   }, [address, network, windowBlocks]);
 
   const explorer = NETWORKS[network]?.explorer ?? 'https://testnet.monadscan.com';
@@ -107,9 +109,9 @@ export default function ValidatorAuditPage() {
               <div className="card" style={{ padding: '24px', marginBottom: 16 }}>
                 <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', flexWrap: 'wrap', gap: 16 }}>
                   <div>
-                    <div style={{ fontFamily: 'Bebas Neue, sans-serif', fontSize: 24, color: 'var(--gold)', letterSpacing: '0.06em', lineHeight: 1.1 }}>
+                    <h1 style={{ fontFamily: 'Bebas Neue, sans-serif', fontSize: 24, color: 'var(--gold)', letterSpacing: '0.06em', lineHeight: 1.1, margin: 0, fontWeight: 400 }}>
                       Audit Trail — {data.moniker || 'Unknown'}
-                    </div>
+                    </h1>
                     <div style={{ fontFamily: 'DM Mono, monospace', fontSize: 12, color: 'var(--text-muted)', marginTop: 4, wordBreak: 'break-all' }}>
                       {data.address}
                     </div>

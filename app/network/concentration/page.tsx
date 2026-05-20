@@ -85,11 +85,13 @@ export default function ConcentrationPage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    const ctrl = new AbortController();
     setLoading(true);
-    fetch(`/api/network/concentration?network=${network}`)
+    fetch(`/api/network/concentration?network=${network}`, { signal: ctrl.signal })
       .then(r => r.json())
       .then(d => { setData(d); setLoading(false); })
-      .catch(() => setLoading(false));
+      .catch(e => { if (e?.name !== 'AbortError') setLoading(false); });
+    return () => ctrl.abort();
   }, [network]);
 
   return (
@@ -112,9 +114,9 @@ export default function ConcentrationPage() {
 
           {/* Header */}
           <div className="card" style={{ padding: '20px 24px', marginBottom: 16 }}>
-            <div style={{ fontFamily: 'Bebas Neue, sans-serif', fontSize: 22, color: 'var(--gold)', letterSpacing: '0.06em', lineHeight: 1.1 }}>
+            <h1 style={{ fontFamily: 'Bebas Neue, sans-serif', fontSize: 22, color: 'var(--gold)', letterSpacing: '0.06em', lineHeight: 1.1, margin: 0, fontWeight: 400 }}>
               Stake Concentration
-            </div>
+            </h1>
             <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 6, maxWidth: 760 }}>
               How decentralized is the active set? Nakamoto coefficient (min operators to halt liveness / control safety), Gini coefficient, Lorenz curve, and multi-ID operator clustering. All numbers roll up at the <em>authAddress</em> level — multi-ID operators (e.g. one operator running 4 validator IDs) are counted as a single operator.
             </div>

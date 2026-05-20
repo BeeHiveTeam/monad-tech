@@ -60,11 +60,13 @@ export default function NextSetProjection({ network }: { network: string }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    const ctrl = new AbortController();
     setLoading(true);
-    fetch(`/api/network/next-set?network=${network}`)
+    fetch(`/api/network/next-set?network=${network}`, { signal: ctrl.signal })
       .then(r => r.json())
       .then(d => { setData(d); setLoading(false); })
-      .catch(() => setLoading(false));
+      .catch(e => { if (e?.name !== 'AbortError') setLoading(false); });
+    return () => ctrl.abort();
   }, [network]);
 
   if (loading || !data) {

@@ -61,6 +61,15 @@ export function giniCoefficient(stakes: number[]): number {
 }
 
 /**
+ * Default stake threshold for the "is this validator in the active set"
+ * fallback heuristic when canonical consensusIds aren't loaded yet. Mirrors
+ * the value in validatorMetrics.ts:computeTotalActiveStake — kept in sync
+ * here so concentration math and per-validator math don't drift apart
+ * (see [[feedback_extract_helper_before_second_copy]]).
+ */
+export const ACTIVE_SET_STAKE_FALLBACK_MON = 10_000_000;
+
+/**
  * Roll up per-validator-ID stakes into per-operator (per authAddress) stakes.
  * Multi-ID operators (e.g. Category Labs running 4 IDs under one auth) are
  * collapsed to a single entry with summed stake and all validatorIds listed.
@@ -76,7 +85,7 @@ export function operatorRollup(
   const useCanonical = consensusIds.size > 0;
   const byAuth = new Map<string, { stakeMon: number; validatorIds: number[] }>();
   for (const [id, data] of chainData) {
-    const inSet = useCanonical ? consensusIds.has(id) : (data.stakeMon ?? 0) >= 10_000_000;
+    const inSet = useCanonical ? consensusIds.has(id) : (data.stakeMon ?? 0) >= ACTIVE_SET_STAKE_FALLBACK_MON;
     if (!inSet) continue;
     const auth = data.authAddress.toLowerCase();
     const entry = byAuth.get(auth) ?? { stakeMon: 0, validatorIds: [] };

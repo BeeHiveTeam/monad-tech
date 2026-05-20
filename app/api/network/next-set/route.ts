@@ -87,20 +87,25 @@ export async function GET(req: NextRequest) {
     }
 
     // Projected next active set: top-N by snapshotStake, where N = current
-    // consensus set size. We assume the cap stays the same epoch-to-epoch
-    // (Monad protocol parameter, currently ~200). When canonical consensusIds
-    // aren't populated yet, fall back to the same threshold we use elsewhere.
-    const currentSetSize = consensusIds.size > 0 ? consensusIds.size : 200;
+    // consensus set size. Require canonical consensusIds — the prior fallback
+    // mixed "top-200 by stake" (projected) with "≥10M stake" (current),
+    // polluting joining/leaving with garbage rows when consensusIds was empty
+    // (e.g. mainnet today — getConsensusValidatorSet returns nothing). Return
+    // building=true instead of guessing. Audit-pass H2.
+    if (consensusIds.size === 0) {
+      return NextResponse.json({
+        network,
+        building: true,
+        message: 'Canonical consensus set not yet available on this network. Projection requires getConsensusValidatorSet to return non-empty.',
+        fetchedAt: Date.now(),
+      });
+    }
+    const currentSetSize = consensusIds.size;
     const projectedNextSet = [...allRows]
       .sort((a, b) => b.snapshotStakeMon - a.snapshotStakeMon)
       .slice(0, currentSetSize);
     const projectedIds = new Set(projectedNextSet.map(r => r.validatorId));
-
-    const currentIds = consensusIds.size > 0
-      ? consensusIds
-      : new Set(allRows
-          .filter(r => r.snapshotStakeMon >= 10_000_000)
-          .map(r => r.validatorId));
+    const currentIds = consensusIds;
 
     // Joining: in projected but NOT in current consensus.
     const joining = projectedNextSet

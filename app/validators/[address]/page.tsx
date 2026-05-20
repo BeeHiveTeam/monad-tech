@@ -154,21 +154,26 @@ export default function ValidatorDetailPage() {
               {/* Header card */}
               <div className="card" style={{ padding: '24px', marginBottom: 16 }}>
                 <div style={{ display: 'flex', alignItems: 'flex-start', gap: 20, flexWrap: 'wrap' }}>
-                  {/* Score circle */}
-                  <div style={{
-                    width: 72, height: 72, borderRadius: '50%', flexShrink: 0,
-                    border: `3px solid ${scoreColor(sc)}`,
-                    display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-                    background: `${scoreColor(sc)}15`,
-                  }}>
+                  {/* Health score circle — legacy 3-axis (health × uptime × recency).
+                      The full 6-axis Composite Score is in the radar card below
+                      (a different, broader number). Labelled HEALTH here to
+                      avoid the SCORE-vs-COMPOSITE confusion flagged by audit C5. */}
+                  <div
+                    title="Legacy health score: health × uptime × recency (40/40/20 weighted). See Composite Score below for the 6-axis comprehensive measure."
+                    style={{
+                      width: 72, height: 72, borderRadius: '50%', flexShrink: 0,
+                      border: `3px solid ${scoreColor(sc)}`,
+                      display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+                      background: `${scoreColor(sc)}15`,
+                    }}>
                     <span style={{ fontFamily: 'Bebas Neue, sans-serif', fontSize: 26, color: scoreColor(sc), lineHeight: 1 }}>{sc}</span>
-                    <span style={{ fontSize: 9, color: 'var(--text-muted)', letterSpacing: '0.06em' }}>SCORE</span>
+                    <span style={{ fontSize: 9, color: 'var(--text-muted)', letterSpacing: '0.06em' }}>HEALTH</span>
                   </div>
 
                   <div style={{ flex: 1, minWidth: 200 }}>
-                    <div style={{ fontFamily: 'Bebas Neue, sans-serif', fontSize: 22, color: 'var(--gold)', letterSpacing: '0.06em', lineHeight: 1.1 }}>
+                    <h1 style={{ fontFamily: 'Bebas Neue, sans-serif', fontSize: 22, color: 'var(--gold)', letterSpacing: '0.06em', lineHeight: 1.1, margin: 0, fontWeight: 400 }}>
                       {data.info?.moniker ?? 'Unknown Validator'}
-                    </div>
+                    </h1>
                     <div style={{ fontFamily: 'DM Mono, monospace', fontSize: 12, color: 'var(--text-muted)', marginTop: 4, wordBreak: 'break-all' }}>
                       {data.address}
                     </div>

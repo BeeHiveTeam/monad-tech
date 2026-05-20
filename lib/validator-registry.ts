@@ -37,13 +37,30 @@ const REGISTRY_TTL_MS = 60 * 60_000; // 1 hour
 async function fetchGithubValidators(): Promise<GithubValidatorInfo[]> {
   // Hard timeouts so a GitHub stall doesn't pin ensureRegistryLoaded callers
   // (which propagates to /api/validators, /api/address/[address], etc.) forever.
-  const res = await fetch(GITHUB_API, {
-    headers: { 'User-Agent': 'monad-stats-dashboard' },
-    next: { revalidate: 3600 },
-    signal: AbortSignal.timeout(10_000),
-  });
-  if (!res.ok) throw new Error(`GitHub API ${res.status}`);
-  const files = await res.json() as { name: string; download_url: string }[];
+  // List API has a 3-attempt retry with exponential backoff because rate-limit
+  // races on cold-start used to leave the dashboard with `validator-N`
+  // placeholder names for an entire 1-hour TTL window — bug observed 2026-05-20.
+  let files: { name: string; download_url: string }[] | null = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const res = await fetch(GITHUB_API, {
+        headers: { 'User-Agent': 'monad-stats-dashboard' },
+        next: { revalidate: 3600 },
+        signal: AbortSignal.timeout(10_000),
+      });
+      if (!res.ok) {
+        // 403 (rate-limit), 5xx — retry. 404 — give up.
+        if (res.status === 404) throw new Error(`GitHub API 404`);
+        throw new Error(`GitHub API ${res.status}`);
+      }
+      files = await res.json() as { name: string; download_url: string }[];
+      break;
+    } catch (e) {
+      if (attempt === 2) throw e;
+      await new Promise(r => setTimeout(r, 500 * Math.pow(2, attempt)));
+    }
+  }
+  if (!files) return [];
 
   const validators: GithubValidatorInfo[] = [];
   const batchSize = 20;
@@ -319,8 +336,32 @@ export async function ensureRegistryLoaded(rpcUrl: string, network: NetworkId = 
     loadRegistry(entries, network);
     // eslint-disable-next-line no-console
     console.log(`[registry] [${network}] Loaded ${entries.length} validators on-chain (${github.length} with GitHub metadata, ${consensusIds.size} in canonical consensus set)`);
+
+    // Bug fix 2026-05-20: when GitHub metadata fetch fails entirely (returns 0
+    // entries) but on-chain data succeeds, _lastFetch was still set to "now",
+    // locking placeholder `validator-N` monikers for the full 1-hour TTL.
+    // Clear _lastFetch so the next caller re-tries the GitHub fetch and gives
+    // real monikers a chance to populate.
+    if (github.length === 0 && entries.length > 0) {
+      _lastFetch.delete(network);
+      console.warn(`[registry] [${network}] GitHub metadata returned 0 entries; clearing TTL for retry on next call`);
+    }
   } catch (e) {
     _lastFetch.delete(network);
     console.error(`[registry] [${network}] Failed to load:`, e);
+  }
+}
+
+/**
+ * Admin-only TTL invalidation. Use when GitHub metadata is stuck stale and
+ * waiting up to an hour for natural refresh isn't acceptable.
+ *
+ * Triggered via /api/validator-registry?force=1.
+ */
+export function invalidateRegistryTTL(network?: NetworkId): void {
+  if (network) {
+    _lastFetch.delete(network);
+  } else {
+    _lastFetch.clear();
   }
 }

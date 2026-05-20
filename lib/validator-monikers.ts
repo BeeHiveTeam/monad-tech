@@ -12,13 +12,19 @@ export interface ValidatorInfo {
   commissionPct?: number;
 }
 
-// Static fallback for known validators
-const STATIC_INFO: Record<string, ValidatorInfo> = {
-  '0x063882309dff155ad967bcf08db42e0ee799b602': {
-    moniker: 'BeeHive',
-    website: 'https://bee-hive.work',
-    description: 'BeeHive Validator — professional Monad testnet operator',
+// Static fallback for known validators. Network-scoped so we don't leak
+// testnet identity onto a mainnet query (audit C3). BeeHive's testnet auth
+// address `0x063882309dff…b602` is NOT registered on mainnet today; if we
+// ever run a mainnet validator with a different auth, add it under 'mainnet'.
+const STATIC_INFO: Record<NetworkId, Record<string, ValidatorInfo>> = {
+  testnet: {
+    '0x063882309dff155ad967bcf08db42e0ee799b602': {
+      moniker: 'BeeHive',
+      website: 'https://bee-hive.work',
+      description: 'BeeHive Validator — professional Monad testnet operator',
+    },
   },
+  mainnet: {},
 };
 
 // Per-network registry — testnet and mainnet have separate validator sets,
@@ -61,7 +67,7 @@ export function loadRegistry(entries: RegistryEntry[], network: NetworkId = 'tes
 
 export function getValidatorInfo(address: string, network: NetworkId = 'testnet'): ValidatorInfo | null {
   const key = address.toLowerCase();
-  return _registries.get(network)?.get(key) ?? STATIC_INFO[key] ?? null;
+  return _registries.get(network)?.get(key) ?? STATIC_INFO[network]?.[key] ?? null;
 }
 
 export function getMoniker(address: string, network: NetworkId = 'testnet'): string | null {

@@ -10,9 +10,17 @@ const STAKING_PRECOMPILE = '0x0000000000000000000000000000000000001000';
 const TOPIC0_VALIDATOR_REWARDED =
   '0x3a420a01486b6b28d6ae89c51f5c3bde3e0e74eecbb646a0c481ccba3aae3754';
 
-const REWARD_PER_BLOCK_MON = 25; // Foundation auto-delegator awards 25 MON per block
 const SCAN_RANGE_BLOCKS = 100_000; // ~11 hours at 0.4s blocks — adjust if RPC limits hit
+const MAX_WINDOW_BLOCKS = 100_000; // hard cap — previously 500K, dropped to respect [[monad-rpc-pacing]]
 const CHUNK_SIZE = 1000;
+const CHUNK_PAUSE_MS = 200; // [[monad-rpc-pacing]] rule — minimum gap between eth_getLogs chunks
+const ADDRESS_RE = /^0x[a-f0-9]{40}$/;
+
+// In-memory cache keyed by (network, address, windowBlocks, limit, format).
+// 60s TTL — slow-moving on-chain data, no benefit from shorter. Per-key isolation
+// avoids the trap of caching `?format=csv` with `?format=json`'s entry.
+const _auditCache = new Map<string, { ts: number; data: unknown; csvBody?: string }>();
+const AUDIT_CACHE_TTL_MS = 60_000;
 
 interface RewardLog {
   blockNumber: number;
@@ -128,6 +136,15 @@ async function getBlockTimestamp(rpcUrl: string, blockNumber: number): Promise<n
   } catch { return null; }
 }
 
+// CSV-cell quoter: wraps every value in "…", escapes embedded quotes by doubling,
+// and prefixes a leading formula-trigger char (= + - @ TAB CR) with a single
+// quote so Excel/Sheets won't auto-evaluate. Numbers/booleans coerced to string.
+function csvCell(v: unknown): string {
+  let s = String(v ?? '');
+  if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
+  return '"' + s.replace(/"/g, '""') + '"';
+}
+
 const ONE_MON = BigInt('1000000000000000000'); // 1e18
 const TEN_K = BigInt(10000);
 
@@ -146,15 +163,45 @@ export async function GET(
   const { address } = await params;
   const addr = address.toLowerCase();
 
+  // Reject malformed addresses before they hit ensureRegistryLoaded (which fans
+  // out 200+ RPC calls on cold start) and before they're interpolated into
+  // Content-Disposition. Audit-pass [[post-deploy-audit-findings-2026-05-20]]
+  // flagged this as a CRLF-injection / path-traversal vector even though
+  // Next.js normalises response headers today.
+  if (!ADDRESS_RE.test(addr)) {
+    return apiError(new Error('invalid address format'), 400, 'audit/invalid-address');
+  }
+
   const sp = req.nextUrl.searchParams;
   const rawNet = sp.get('network') ?? 'testnet';
   const network: NetworkId = (rawNet === 'mainnet' ? 'mainnet' : 'testnet');
-  const windowBlocks = Math.min(
-    parseInt(sp.get('windowBlocks') || String(SCAN_RANGE_BLOCKS), 10),
-    500_000,
-  );
-  const format = sp.get('format') || 'json';
-  const limit = Math.min(parseInt(sp.get('limit') || '500', 10), 5000);
+
+  // Number.isFinite guard — `parseInt('') || default` doesn't catch `0` (falsy),
+  // which previously triggered a full-history scan. NaN guard same fix.
+  const wbRaw = parseInt(sp.get('windowBlocks') ?? '', 10);
+  const windowBlocks = Number.isFinite(wbRaw) && wbRaw > 0
+    ? Math.min(wbRaw, MAX_WINDOW_BLOCKS)
+    : SCAN_RANGE_BLOCKS;
+
+  const lmRaw = parseInt(sp.get('limit') ?? '', 10);
+  const limit = Number.isFinite(lmRaw) && lmRaw > 0 ? Math.min(lmRaw, 5000) : 500;
+
+  const format = sp.get('format') === 'csv' ? 'csv' : 'json';
+
+  const cacheKey = `${network}:${addr}:${windowBlocks}:${limit}:${format}`;
+  const cached = _auditCache.get(cacheKey);
+  if (cached && Date.now() - cached.ts < AUDIT_CACHE_TTL_MS) {
+    if (format === 'csv' && cached.csvBody) {
+      return new NextResponse(cached.csvBody, {
+        status: 200,
+        headers: {
+          'Content-Type': 'text/csv',
+          'Content-Disposition': `attachment; filename="audit-${addr}-${network}.csv"`,
+        },
+      });
+    }
+    return NextResponse.json(cached.data);
+  }
 
   try {
     const rpcUrl = (network === 'testnet' && process.env.MONAD_RPC_URL)
@@ -202,9 +249,15 @@ export async function GET(
 
     const fromBlock = Math.max(0, tip - windowBlocks);
 
-    // Fetch logs in chunks to respect RPC log-range limits
+    // Fetch logs in chunks to respect RPC log-range limits. Insert CHUNK_PAUSE_MS
+    // between chunks per [[monad-rpc-pacing]] — burst patterns overflow the
+    // monad-rpc triedb_env channel and cause WARN-storm. First chunk has no
+    // pause (single curl shouldn't pay a 200ms latency floor for nothing).
     const allLogs: RewardLog[] = [];
+    let firstChunk = true;
     for (let from = fromBlock; from <= tip; from += CHUNK_SIZE) {
+      if (!firstChunk) await new Promise(r => setTimeout(r, CHUNK_PAUSE_MS));
+      firstChunk = false;
       const to = Math.min(from + CHUNK_SIZE - 1, tip);
       const logs = await fetchLogChunk(rpcUrl, ownedValidatorIds, from, to);
       allLogs.push(...logs);
@@ -215,8 +268,9 @@ export async function GET(
     allLogs.sort((a, b) => b.blockNumber - a.blockNumber);
     const recent = allLogs.slice(0, limit);
 
-    // Fetch timestamps for first N records (parallel, bounded)
-    const TIMESTAMP_FETCH_LIMIT = Math.min(50, recent.length);
+    // Fetch timestamps for first N records (parallel, bounded). UI renders top
+    // 100 rows; align fetch limit so rows 51-100 don't show "—" for timestamp.
+    const TIMESTAMP_FETCH_LIMIT = Math.min(100, recent.length);
     const tsPromises = recent.slice(0, TIMESTAMP_FETCH_LIMIT).map(r =>
       getBlockTimestamp(rpcUrl, r.blockNumber).then(ts => [r.blockNumber, ts] as const)
     );
@@ -256,15 +310,27 @@ export async function GET(
       fetchedAt: Date.now(),
     };
 
-    // CSV export
+    // CSV export — every cell is fully quoted and formula-injection-escaped.
+    // Even though current fields are all server-generated (no user-controllable
+    // strings), future additions like `moniker` would silently expose
+    // formula injection in Excel/Sheets. Defence-in-depth, ~5 lines.
     if (format === 'csv') {
       const header = 'block_number,timestamp_iso,amount_mon,validator_id,tx_hash,type,reason';
       const rows = records.map(r => {
         const tsIso = r.timestamp ? new Date(r.timestamp * 1000).toISOString() : '';
-        const reason = (r.reason || '').replace(/,/g, ';');
-        return `${r.blockNumber},${tsIso},${r.amount},${r.validatorId},${r.txHash || ''},${r.type},${reason}`;
+        return [
+          r.blockNumber,
+          tsIso,
+          r.amount,
+          r.validatorId,
+          r.txHash ?? '',
+          r.type,
+          r.reason ?? '',
+        ].map(csvCell).join(',');
       });
-      return new NextResponse([header, ...rows].join('\n'), {
+      const csvBody = [header, ...rows].join('\n');
+      _auditCache.set(cacheKey, { ts: Date.now(), data, csvBody });
+      return new NextResponse(csvBody, {
         status: 200,
         headers: {
           'Content-Type': 'text/csv',
@@ -273,6 +339,7 @@ export async function GET(
       });
     }
 
+    _auditCache.set(cacheKey, { ts: Date.now(), data });
     return NextResponse.json(data);
   } catch (err) {
     return apiError(err, 500, `audit/${addr}`);
