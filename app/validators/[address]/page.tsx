@@ -195,6 +195,18 @@ export default function ValidatorDetailPage() {
                       >
                         Also on MonadScan ↗
                       </a>
+                      <Link
+                        href={`/validators/${data.address}/audit`}
+                        style={{
+                          fontSize: 11, color: 'var(--gold)', textDecoration: 'none',
+                          padding: '3px 10px', border: '1px solid var(--gold-dim)',
+                          borderRadius: 3, letterSpacing: '0.06em',
+                          background: 'rgba(201,168,76,0.08)',
+                        }}
+                        title="On-chain reward receipts (CSV exportable)"
+                      >
+                        AUDIT TRAIL →
+                      </Link>
                     </div>
                   </div>
                 </div>
