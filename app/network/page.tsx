@@ -52,6 +52,8 @@ interface NetworkHealth {
     events: Array<{ ts: number; type: string; address: string; moniker?: string; oldStake?: number; newStake?: number; delta?: number }>;
     tracked: number;
     totalDetected?: number;
+    totalIncludingRotation?: number;
+    rotationFiltered?: number;
     historyWindowDays?: number;
   };
 }
@@ -77,14 +79,6 @@ function Section({ title, subtitle, children }: { title: string; subtitle?: stri
 function fmtTime(ms: number | null): string {
   if (!ms) return '—';
   return new Date(ms).toLocaleString('ru-RU', { hour12: false });
-}
-
-function fmtAge(ms: number | null): string {
-  if (!ms) return '—';
-  const dt = Date.now() - ms;
-  if (dt < 60_000) return `${Math.floor(dt / 1000)}s ago`;
-  if (dt < 3600_000) return `${Math.floor(dt / 60_000)}m ago`;
-  return `${Math.floor(dt / 3600_000)}h ago`;
 }
 
 export default function NetworkPage() {
@@ -205,27 +199,8 @@ export default function NetworkPage() {
                 ))}
               </div>
 
-              <div style={{ fontSize: 10, letterSpacing: '0.08em', color: 'var(--text-muted)', marginBottom: 6 }}>
-                TOP-10 BY STAKE ({d.decentralization.top10SharePct.toFixed(2)}% of total)
-              </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                {d.decentralization.topValidators.map((v, i) => (
-                  <div key={v.address} className="row-top10">
-                    <span style={{ color: 'var(--text-muted)', textAlign: 'right' }}>#{i + 1}</span>
-                    <span style={{
-                      color: 'var(--text)', overflow: 'hidden', minWidth: 0,
-                      whiteSpace: 'nowrap', textOverflow: 'ellipsis',
-                    }}>
-                      {v.moniker ?? v.address}
-                    </span>
-                    <span style={{ color: 'var(--gold)', textAlign: 'right', whiteSpace: 'nowrap' }}>
-                      {v.stakeMon.toLocaleString('en-US', { maximumFractionDigits: 0 })} MON
-                    </span>
-                    <span className="col-share" style={{ color: 'rgba(138,136,112,0.7)', textAlign: 'right' }}>
-                      {v.sharePct.toFixed(2)}%
-                    </span>
-                  </div>
-                ))}
+              <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                Top operators by stake: <Link href="/network/concentration" style={{ color: 'var(--gold)' }}>see top-20 + Lorenz + Gini on the concentration deep-dive →</Link>
               </div>
             </Section>
 
@@ -317,70 +292,17 @@ export default function NetworkPage() {
               })()}
             </Section>
 
-            {/* Geo distribution */}
-            <Section
-              title="PEER GEO DISTRIBUTION"
-              subtitle={`From validator keepalive logs, ${d.geo.totalPeers} peers in the last 15 minutes, geoloc via ip-api.com. Refreshed ${fmtAge(d.geo.fetchedAt)}.`}
-            >
-              <div className="grid-geo">
-                <div>
-                  <div style={{ fontSize: 10, letterSpacing: '0.08em', color: 'var(--text-muted)', marginBottom: 6 }}>
-                    BY COUNTRY
-                  </div>
-                  {d.geo.byCountry.map(c => {
-                    const pct = d.geo.totalPeers > 0 ? (c.count / d.geo.totalPeers) * 100 : 0;
-                    return (
-                      <div key={c.countryCode} style={{
-                        display: 'grid', gridTemplateColumns: '30px 1fr 60px',
-                        gap: 8, alignItems: 'center', marginBottom: 3,
-                        fontFamily: 'DM Mono, monospace', fontSize: 11,
-                      }}>
-                        <span style={{ color: 'var(--gold)' }}>{c.countryCode}</span>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
-                          <span style={{ color: 'var(--text)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.country}</span>
-                          <div style={{ flex: 1, height: 5, background: 'rgba(201,168,76,0.1)', borderRadius: 2 }}>
-                            <div style={{ width: `${pct}%`, height: '100%', background: 'var(--gold)', borderRadius: 2 }} />
-                          </div>
-                        </div>
-                        <span style={{ color: 'var(--text-muted)', textAlign: 'right' }}>{c.count}</span>
-                      </div>
-                    );
-                  })}
-                </div>
-                <div>
-                  <div style={{ fontSize: 10, letterSpacing: '0.08em', color: 'var(--text-muted)', marginBottom: 6 }}>
-                    BY AS (HOSTING PROVIDER)
-                  </div>
-                  {d.geo.byAsn.slice(0, 10).map(a => {
-                    const pct = d.geo.totalPeers > 0 ? (a.count / d.geo.totalPeers) * 100 : 0;
-                    return (
-                      <div key={a.asn} style={{
-                        display: 'grid', gridTemplateColumns: '1fr 80px',
-                        gap: 8, alignItems: 'center', marginBottom: 3,
-                        fontFamily: 'DM Mono, monospace', fontSize: 11,
-                      }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
-                          <span style={{ color: 'var(--text)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                            {a.org || a.asn}
-                          </span>
-                          <div style={{ flex: 1, height: 5, background: 'rgba(201,168,76,0.1)', borderRadius: 2 }}>
-                            <div style={{ width: `${pct}%`, height: '100%', background: 'var(--gold)', borderRadius: 2 }} />
-                          </div>
-                        </div>
-                        <span style={{ color: 'var(--text-muted)', textAlign: 'right' }}>{a.count}</span>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            </Section>
+            {/* Peer geo moved to /beehive — it reflects OUR validator's peer
+                keepalive log, not the network's geographic distribution. */}
 
             {/* Validator set changes */}
             <Section
               title="VALIDATOR SET CHANGES"
               subtitle={d.validatorSetChanges.events.length === 0
-                ? `Tracking ${d.validatorSetChanges.tracked} validators. No changes observed in the last ${d.validatorSetChanges.historyWindowDays ?? 30} days.`
-                : `${d.validatorSetChanges.events.length} of ${d.validatorSetChanges.totalDetected ?? d.validatorSetChanges.events.length} events shown — stake decreases ≥1000 MON, removals, and additions over last ${d.validatorSetChanges.historyWindowDays ?? 30} days.`}
+                ? `Tracking ${d.validatorSetChanges.tracked} validators. No real undelegations observed in the last ${d.validatorSetChanges.historyWindowDays ?? 30} days.`
+                : `${d.validatorSetChanges.events.length} of ${d.validatorSetChanges.totalDetected ?? d.validatorSetChanges.events.length} real stake changes shown — undelegations and additions only over last ${d.validatorSetChanges.historyWindowDays ?? 30} days.${
+                    d.validatorSetChanges.rotationFiltered ? ` ${d.validatorSetChanges.rotationFiltered.toLocaleString()} epoch-rotation artifacts (Δ ≈ -11M MON when operators rotate out of the 200-slot active set, normal protocol behaviour) filtered out.` : ''
+                  }`}
             >
               {d.validatorSetChanges.events.length === 0 ? (
                 <div style={{ padding: '10px', fontSize: 11, color: 'var(--text-muted)', border: '1px dashed rgba(201,168,76,0.1)', borderRadius: 4 }}>

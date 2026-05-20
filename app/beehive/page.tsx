@@ -4,6 +4,7 @@ import HexBg from '@/components/HexBg';
 import SiteHeader from '@/components/SiteHeader';
 import TabNav from '@/components/TabNav';
 import NodeVersionCheck from '@/components/NodeVersionCheck';
+import PeerGeoCard from '@/components/PeerGeoCard';
 import { useNetwork } from '@/lib/useNetwork';
 
 interface BeeHiveData {
@@ -377,6 +378,10 @@ export default function BeeHivePage() {
               </div>
             </div>
           </div>
+
+          {/* Peer geo — moved from /network 2026-05-20 because it reflects
+              this validator's keepalive log, not the network's full geography. */}
+          {network === 'testnet' && <PeerGeoCard />}
 
           {/* Meta: pointer back to the live dashboard */}
           <div className="card" style={{

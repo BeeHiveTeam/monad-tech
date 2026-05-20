@@ -117,12 +117,15 @@ export async function GET(req: NextRequest) {
       .filter(r => currentIds.has(r.validatorId) && !projectedIds.has(r.validatorId))
       .sort((a, b) => b.snapshotStakeMon - a.snapshotStakeMon);
 
-    // Stake movers: |activeStake − snapshotStake| above thresholds. These are
-    // the validators whose snapshotStake at the *next* epoch boundary will
-    // shift, potentially pushing them in/out of the active set.
+    // Stake movers: REAL delegate/undelegate flow only. Audit 2026-05-20 found
+    // that without the (snap>0 AND active>0) gate, this table fills with 30
+    // epoch-rotation crossings (snap=0, active=11M) — already shown in the
+    // Leaving list above + filtered as artifacts in Validator Set Changes.
+    // Now requires both stakes positive (= real delegation movement that
+    // doesn't simultaneously cross an active-set boundary).
     const movers = allRows
       .filter(r => {
-        if (r.snapshotStakeMon === 0 && r.activeStakeMon === 0) return false;
+        if (r.snapshotStakeMon <= 0 || r.activeStakeMon <= 0) return false;
         return Math.abs(r.deltaMon) >= STAKE_MOVE_THRESHOLD_MON
             || Math.abs(r.deltaPct) >= STAKE_MOVE_THRESHOLD_PCT;
       })

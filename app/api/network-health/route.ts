@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import {
   getReorgState, getClientVersion, getGeoSummary, getSetChanges,
   fetchReorgsFromInflux, fetchSetChangesFromInflux,
+  isSnapshotRotationArtifact,
 } from '@/lib/networkHealth';
 import { getValidatorInfo } from '@/lib/validator-monikers';
 import { ensureRegistryLoaded, getChainDataById, getConsensusIds } from '@/lib/validator-registry';
@@ -99,11 +100,19 @@ export async function GET() {
       phantomAddresses.add(e.address);
     }
   }
-  const filtered = mergedSetChangesRaw.filter(e => {
+  // Audit-pass 2026-05-20 found 95% of `stake_decrease` events are epoch-rotation
+  // artifacts (delta ≈ -11M = canonical Tier-4 stake of operators rotating
+  // out of the 200-slot active set), not real undelegations. Filter them
+  // here so the "real" 30-day undelegation log is signal, not noise.
+  // See [[snapshot-rotation-noise-filter]] memory + isSnapshotRotationArtifact()
+  // in lib/networkHealth.ts.
+  const phantomFiltered = mergedSetChangesRaw.filter(e => {
     if (e.type === 'removed' && !e.moniker && (e.oldStake ?? 0) <= 0) return false;
     if (e.type === 'added' && phantomAddresses.has(e.address) && !e.moniker) return false;
     return true;
   });
+  const rotationCount = phantomFiltered.filter(isSnapshotRotationArtifact).length;
+  const filtered = phantomFiltered.filter(e => !isSnapshotRotationArtifact(e));
 
   // Enrich monikers from the validator registry — surviving events may still
   // lack moniker if the writer captured prev snapshot before GitHub metadata
@@ -113,8 +122,8 @@ export async function GET() {
     const info = getValidatorInfo(e.address);
     return info?.moniker ? { ...e, moniker: info.moniker } : e;
   });
-  const totalSetChangesAllTime = persistedSetChanges.length
-    + setChanges.events.filter(e => !persistedSetChanges.some(p => setChangesKey(p) === setChangesKey(e))).length;
+  const totalSetChangesAllTime = filtered.length;
+  const totalRawSetChanges = phantomFiltered.length;
 
   return NextResponse.json({
     fetchedAt: Date.now(),
@@ -166,9 +175,11 @@ export async function GET() {
     validatorSetChanges: {
       events: mergedSetChanges,
       tracked: setChanges.tracked,
-      totalDetected: totalSetChangesAllTime,
+      totalDetected: totalSetChangesAllTime,                 // post-filter (real undelegations)
+      totalIncludingRotation: totalRawSetChanges,            // pre-filter (rotation + real)
+      rotationFiltered: rotationCount,                       // number of artifact events suppressed
       historyWindowDays: 30,
-      note: 'Monad testnet does not expose slashing events directly. Any stake decrease ≥1000 MON or validator removal is surfaced here. In-memory ring (since service restart) merged with persisted history from InfluxDB (last 30 days).',
+      note: `Real undelegations + additions only. Snapshot-rotation artifacts (delta ≈ -11M MON, normal protocol behaviour when operators rotate out of the 200-slot active set) are filtered: ${rotationCount} suppressed of ${totalRawSetChanges} raw events in the 30-day window.`,
     },
   });
 }

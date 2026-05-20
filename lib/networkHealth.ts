@@ -166,6 +166,37 @@ export interface SetChangeEvent {
   address: string; moniker?: string;
   oldStake?: number; newStake?: number; delta?: number;
 }
+
+/**
+ * Detect "events" that are actually epoch-rotation artifacts, not real
+ * delegate/undelegate actions. On Monad, snapshotStake (slot 8) is the
+ * value tickValidatorSetTracker compares — and it cycles to 0 for any
+ * validator not in the next epoch's active set, even though their underlying
+ * activeStake (slot 2) is unchanged.
+ *
+ * Empirically (audit 2026-05-20): of 12,447 stake_decrease events in 30 days,
+ * 95%+ have delta ≈ −11,000,000 MON (the canonical VDP Tier-4 stake size)
+ * — they're operators rotating in/out of the 200-slot active set, not
+ * unstaking. Real undelegations show as smaller fractional deltas.
+ *
+ * Heuristic: filter delta within ±50K of −11M; also filter cases where
+ * oldStake or newStake is 0 (rotation crossing). Real undelegations almost
+ * never land on these exact boundary conditions.
+ *
+ * Trade-off: a real full-Tier-4 withdrawal (very rare — VDP-tier validators
+ * almost never fully exit, they migrate to mainnet) would be filtered out
+ * too. Acceptable noise floor vs the prior 99% false-positive rate.
+ */
+const ROTATION_DELTA = -11_000_000;
+const ROTATION_TOLERANCE = 50_000;
+export function isSnapshotRotationArtifact(e: SetChangeEvent): boolean {
+  if (e.type !== 'stake_decrease') return false;
+  // Crossings — exactly going from non-zero to zero, or zero to non-zero
+  if ((e.oldStake ?? 0) === 0 || (e.newStake ?? 0) === 0) return true;
+  // Canonical rotation delta — symmetric tolerance around -11M
+  if (e.delta != null && Math.abs(e.delta - ROTATION_DELTA) < ROTATION_TOLERANCE) return true;
+  return false;
+}
 interface ValidatorSnapshot { address: string; moniker?: string; stakeMon: number; }
 
 interface NhStore {
