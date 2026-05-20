@@ -9,6 +9,7 @@ import Pagination from '@/components/Pagination';
 import { NETWORKS } from '@/lib/networks';
 import { useNetwork } from '@/lib/useNetwork';
 import MainnetSoonCard from '@/components/MainnetSoonCard';
+import { computeValidatorScore } from '@/lib/validatorMetrics';
 
 type Health = 'active' | 'slow' | 'missing';
 type SortKey = 'score' | 'rank' | 'health' | 'uptime' | 'blocks' | 'share' | 'txs' | 'age' | 'stake' | 'commission';
@@ -89,16 +90,13 @@ function shortAge(seconds: number): string {
 }
 
 function calcScore(v: Validator, expectedGapSeconds: number): number {
-  const healthScore = v.health === 'active' ? 100 : v.health === 'slow' ? 40 : 0;
-  const uptimeScore = Math.min(v.participationPct, 100);
-  const maxAge = expectedGapSeconds * 5;
-  const recencyScore = maxAge > 0 ? Math.max(0, (1 - v.ageSeconds / maxAge)) * 100 : 0;
-  const base = healthScore * 0.4 + uptimeScore * 0.4 + recencyScore * 0.2;
-  // Unregistered block producers (miner addr not in staking precompile) get a
-  // 0.7× penalty. Block production is verified, but stake backing isn't —
-  // without that we can't tell if they'll stay honest or are a throwaway key.
-  const penalty = v.registered === false ? 0.7 : 1;
-  return Math.round(base * penalty);
+  return computeValidatorScore({
+    health: v.health,
+    participationPct: v.participationPct,
+    ageSeconds: v.ageSeconds,
+    personalGapSeconds: expectedGapSeconds,
+    registered: v.registered !== false,
+  });
 }
 
 function scoreColor(score: number): string {

@@ -9,6 +9,7 @@ import { useNetwork } from '@/lib/useNetwork';
 import { NETWORKS } from '@/lib/networks';
 import { formatDistanceToNow } from 'date-fns';
 import DelegatorsPanel from '@/components/DelegatorsPanel';
+import CompositeScoreCard, { type CompositeScore } from '@/components/CompositeScoreCard';
 
 type Health = 'active' | 'slow' | 'missing' | 'unknown';
 
@@ -25,6 +26,7 @@ interface ValidatorDetail {
     stakeMon?: number;
     commissionPct?: number;
   } | null;
+  compositeScore?: CompositeScore;
   stats: {
     health: Health;
     score: number;
@@ -211,6 +213,9 @@ export default function ValidatorDetailPage() {
                   </div>
                 </div>
               </div>
+
+              {/* Composite 6-axis radar */}
+              {data.compositeScore && <CompositeScoreCard score={data.compositeScore} />}
 
               {/* Stats row */}
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 10, marginBottom: 16 }}>

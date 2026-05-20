@@ -13,6 +13,7 @@ import {
   isInActiveSet,
   computeValidatorScore,
   computeAuthStake,
+  computeCompositeScore,
 } from '@/lib/validatorMetrics';
 
 export const dynamic = 'force-dynamic';
@@ -165,6 +166,29 @@ export async function GET(
       registered: info != null,
     });
 
+    // 6-axis composite — exposed alongside the legacy single-score for the
+    // detail page's radar widget. Keeps the legacy `stats.score` field stable
+    // for any external consumers; adds `compositeScore.{composite,axes}` for
+    // the new view. See computeCompositeScore JSDoc for axis semantics.
+    const compositeScore = computeCompositeScore({
+      health: m.health,
+      participationPct: m.participationPct,
+      participationLong: m.participationLong,
+      ageSeconds: m.ageSeconds,
+      personalGapSeconds: m.personalGapSeconds,
+      stakeMon,
+      totalActiveStake,
+      isActiveSet,
+      registered: info != null,
+      hasSecp: !!info?.secp,
+      commissionPct: info?.commissionPct ?? null,
+      hasMoniker: !!info?.moniker,
+      hasWebsite: !!info?.website,
+      hasDescription: !!info?.description,
+      hasLogo: !!info?.logo,
+      hasSocial: !!info?.x,
+    });
+
     // Recent blocks for this validator
     const recentBlocks = myBlocks
       .sort((a, b) => parseInt(b.number, 16) - parseInt(a.number, 16))
@@ -188,6 +212,7 @@ export async function GET(
       isActiveSet,
       beneficiary: info?.validatorId ? getBeneficiaryForValidator(info.validatorId) : null,
       consensusSetSize: consensusIds.size,
+      compositeScore,
       stats: {
         health: m.health,
         score,

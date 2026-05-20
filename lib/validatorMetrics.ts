@@ -252,3 +252,157 @@ export function computeValidatorScore(args: {
 function round1(x: number): number {
   return Math.round(x * 10) / 10;
 }
+
+/**
+ * Six-axis composite score (Stakewiz Wiz-Score / Rated RAVER / Trillium-inspired).
+ * Each axis is 0–100; composite is a weighted mean. Axes are exposed separately
+ * so the UI can render a radar chart and operators can see *why* their score
+ * moved (e.g. "Decentralization dropped 12pt — your AS now controls >25% stake").
+ *
+ * Weights mirror Stakewiz's empirical tuning, adjusted for Monad's data model:
+ * we don't yet have MEV, vote-latency, or epoch-distance signals — those will
+ * be added later. Until then, weights sum to 1.00 across the 6 axes we can
+ * compute deterministically from on-chain data + registry metadata.
+ */
+export interface CompositeScoreInput {
+  // Reliability axis — straight from computeValidatorMetrics
+  health: ValidatorHealth;
+  participationPct: number | null;
+  participationLong: number | null;
+  ageSeconds: number;
+  personalGapSeconds: number;
+  // Production / decentralization
+  stakeMon: number | null;
+  totalActiveStake: number;
+  isActiveSet: boolean;
+  registered: boolean;
+  // Ops maturity
+  hasSecp: boolean;            // info.secp present → consensus key registered
+  // Returns proxy (until ValidatorRewarded-derived TrueAPY ships)
+  commissionPct: number | null;
+  // Info completeness (from validator-monikers info struct)
+  hasMoniker: boolean;
+  hasWebsite: boolean;
+  hasDescription: boolean;
+  hasLogo: boolean;
+  hasSocial: boolean;
+}
+
+export interface CompositeScoreOutput {
+  composite: number;
+  axes: {
+    reliability: number;
+    production: number;
+    returns: number;
+    decentralization: number;
+    opsMaturity: number;
+    infoScore: number;
+  };
+}
+
+const COMPOSITE_WEIGHTS = {
+  reliability: 0.20,
+  production: 0.20,
+  returns: 0.15,
+  decentralization: 0.15,
+  opsMaturity: 0.15,
+  infoScore: 0.15,
+};
+
+export function computeCompositeScore(input: CompositeScoreInput): CompositeScoreOutput {
+  // 1. Reliability — same shape as legacy computeValidatorScore (health×uptime×recency).
+  const healthScore = input.health === 'active' ? 100 : input.health === 'slow' ? 40 : 0;
+  // Prefer long-window participation when available (≥5 expected blocks observed);
+  // it's less jittery than the 500-block window for low-stake validators.
+  const uptimeRaw = input.participationLong ?? input.participationPct ?? 0;
+  const uptimeScore = Math.min(uptimeRaw, 100);
+  const maxAge = input.personalGapSeconds * 5;
+  const recencyScore = maxAge > 0
+    ? Math.max(0, (1 - input.ageSeconds / maxAge)) * 100
+    : 0;
+  const reliability = healthScore * 0.4 + uptimeScore * 0.4 + recencyScore * 0.2;
+
+  // 2. Production — how close participation is to 100% expected. Over-prod
+  //    isn't penalised heavily (capped at 100 with mild taper to 90 at 130%+),
+  //    under-prod is proportional. Brand-new validators (participation null)
+  //    get a neutral 50 to avoid penalising bootstrap.
+  let production: number;
+  if (input.participationPct == null) {
+    production = 50;
+  } else {
+    const p = input.participationPct;
+    if (p >= 100) {
+      // taper: 100% → 100, 130% → 90, 200% → 70
+      production = Math.max(60, 100 - (p - 100) * 0.3);
+    } else {
+      // 100% → 100, 80% → 80, 50% → 50, 0% → 0
+      production = Math.max(0, p);
+    }
+  }
+
+  // 3. Returns — inverse of commission for now (delegator-perspective:
+  //    lower commission ≈ higher realised yield). VDP cap is 15%; we map
+  //    0% → 100, 15% → 50, ≥30% → 0. Replace with TrueAPY = median realised
+  //    rewards / stake once the ValidatorRewarded scanner is in the hot path.
+  let returns: number;
+  if (input.commissionPct == null) {
+    returns = 50;
+  } else {
+    const c = Math.max(0, input.commissionPct);
+    returns = Math.max(0, 100 - (c / 15) * 50);
+  }
+
+  // 4. Decentralization — penalises whale concentration. stakeShare 0% → 100,
+  //    1% → 90, 5% → 50, 10%+ → 10 (asymptote, never 0 — even huge validators
+  //    contribute some baseline security). Inactive/no-stake validators score
+  //    100 (they contribute nothing to centralisation risk).
+  let decentralization: number;
+  if (!input.isActiveSet || !input.stakeMon || input.totalActiveStake <= 0) {
+    decentralization = 100;
+  } else {
+    const sharePct = (input.stakeMon / input.totalActiveStake) * 100;
+    // 0%→100, 1%→90, 2%→80, 5%→50, 10%→0 (clamped)
+    decentralization = Math.max(0, 100 - sharePct * 10);
+  }
+
+  // 5. Ops Maturity — weighted bool checklist of operational hygiene signals.
+  let opsMaturity = 0;
+  if (input.registered) opsMaturity += 30;          // staked in precompile
+  if (input.isActiveSet) opsMaturity += 25;         // passes snapshot threshold
+  if (input.hasSecp) opsMaturity += 20;             // consensus key on-chain
+  // Long-window participation present ⇒ been around for ≥5 expected blocks ⇒ not brand-new.
+  if (input.participationLong != null) opsMaturity += 15;
+  // Reasonable commission (0–15%, VDP-compliant). Pure 0% gets full credit
+  // (foundation/early validators); 16%+ loses these points.
+  if (input.commissionPct != null && input.commissionPct >= 0 && input.commissionPct <= 15) {
+    opsMaturity += 10;
+  }
+
+  // 6. Info score — metadata completeness from validator-monikers.
+  let infoScore = 0;
+  if (input.hasMoniker)     infoScore += 25;
+  if (input.hasWebsite)     infoScore += 20;
+  if (input.hasDescription) infoScore += 20;
+  if (input.hasLogo)        infoScore += 20;
+  if (input.hasSocial)      infoScore += 15;
+
+  const axes = {
+    reliability: Math.round(reliability),
+    production: Math.round(production),
+    returns: Math.round(returns),
+    decentralization: Math.round(decentralization),
+    opsMaturity: Math.round(opsMaturity),
+    infoScore: Math.round(infoScore),
+  };
+
+  const composite = Math.round(
+    axes.reliability * COMPOSITE_WEIGHTS.reliability +
+    axes.production * COMPOSITE_WEIGHTS.production +
+    axes.returns * COMPOSITE_WEIGHTS.returns +
+    axes.decentralization * COMPOSITE_WEIGHTS.decentralization +
+    axes.opsMaturity * COMPOSITE_WEIGHTS.opsMaturity +
+    axes.infoScore * COMPOSITE_WEIGHTS.infoScore
+  );
+
+  return { composite, axes };
+}

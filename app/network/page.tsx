@@ -1,6 +1,8 @@
 'use client';
 import { useEffect, useState } from 'react';
+import Link from 'next/link';
 import HexBg from '@/components/HexBg';
+import NextSetProjection from '@/components/NextSetProjection';
 import SiteHeader from '@/components/SiteHeader';
 import TabNav from '@/components/TabNav';
 import Pagination from '@/components/Pagination';
@@ -154,11 +156,29 @@ export default function NetworkPage() {
 
         {d && (
           <>
+            {/* Epoch lifecycle + next-set projection */}
+            <div style={{ marginBottom: 16 }}>
+              <NextSetProjection network={network} />
+            </div>
+
             {/* Decentralization / Nakamoto */}
             <Section
               title="DECENTRALIZATION · NAKAMOTO COEFFICIENT"
               subtitle="Minimum number of validators whose combined stake exceeds the threshold. BFT-safety requires >2/3, liveness-halt >1/3."
             >
+              <div style={{ marginBottom: 14, fontSize: 11 }}>
+                <Link
+                  href="/network/concentration"
+                  style={{
+                    display: 'inline-block', padding: '4px 10px',
+                    border: '1px solid var(--gold-dim)', borderRadius: 3,
+                    color: 'var(--gold)', textDecoration: 'none',
+                    background: 'rgba(201,168,76,0.08)', letterSpacing: '0.06em',
+                  }}
+                >
+                  DEEP DIVE: Gini, Lorenz, multi-ID operators →
+                </Link>
+              </div>
               <div style={{
                 display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
                 gap: 24, marginBottom: 20,
