@@ -141,7 +141,10 @@ export default function IncidentTimeline() {
             INCIDENT TIMELINE
           </span>
           <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-            reorgs · validator churn · retry spikes · block stalls · critical logs · state root · state sync · consensus stress · vote delay · tip lag
+            retry spikes · vote delay · tip lag · block stalls · reorgs · state root · state sync · consensus stress · exec lag · critical logs · commission changes · real undelegations
+          </span>
+          <span style={{ fontSize: 10, color: 'var(--text-muted)', display: 'block', marginTop: 4 }}>
+            Epoch-rotation artifacts (snapshotStake → 0 when an operator rotates out of the 200-slot active set) are filtered out — see <a href="/network" style={{ color: 'var(--gold-dim)' }}>/network</a> for the Validator Set Changes counterpart.
           </span>
         </div>
         {data && (

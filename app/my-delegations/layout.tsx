@@ -1,7 +1,9 @@
 import type { Metadata } from 'next';
 
 export const metadata: Metadata = {
-  title: 'My delegations — portfolio view for Monad delegators · Monad Tech',
+  // Root layout's title.template adds "· Monad Tech" — don't add it here too
+  // (bug fixed 2026-05-21 audit B1).
+  title: 'My delegations — portfolio view for Monad delegators',
   description:
     'Paste your wallet address to see every Monad validator you have delegated to, ' +
     'with stake amount, commission, and contribution to total positions.',

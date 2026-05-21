@@ -11,7 +11,9 @@ export async function generateMetadata(
   const safeAddr = /^0x[a-f0-9]{40}$/i.test(address) ? address.toLowerCase() : '0x';
   const short = `${safeAddr.slice(0, 10)}…${safeAddr.slice(-4)}`;
   return {
-    title: `Validator ${short} — Monad Tech`,
+    // Root layout's title.template adds "· Monad Tech" — keep this clean
+    // (bug B1, audit 2026-05-21).
+    title: `Validator ${short}`,
     description: `Stake, commission, uptime, block production, on-chain delegators and composite 6-axis score for Monad validator ${short}. Live from the staking precompile.`,
     alternates: {
       canonical: `https://monad-tech.com/validators/${safeAddr}`,

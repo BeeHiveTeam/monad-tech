@@ -10,7 +10,8 @@ export async function generateMetadata(
   const safeAddr = /^0x[a-f0-9]{40}$/i.test(address) ? address.toLowerCase() : '0x';
   const short = `${safeAddr.slice(0, 10)}…${safeAddr.slice(-4)}`;
   return {
-    title: `Audit Trail ${short} — Monad Tech`,
+    // Root layout's title.template adds "· Monad Tech" — keep clean (bug B1).
+    title: `Audit Trail ${short}`,
     description: `On-chain ValidatorRewarded event receipts for ${short}. CSV-exportable reward ledger across all owned validator IDs.`,
     alternates: {
       canonical: `https://monad-tech.com/validators/${safeAddr}/audit`,

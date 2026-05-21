@@ -120,6 +120,29 @@ export default function MyDelegationsPage() {
             </button>
           </form>
 
+          {/* Sample address hint — empty state pre-fix had no way for first-time
+              visitors to try the feature without remembering a 0x address.
+              Pre-fills the Foundation delegator (~266 positions, fast demo). */}
+          {!submitted && !err && (
+            <div className="card" style={{ padding: '12px 16px', marginBottom: 16, fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.6 }}>
+              <strong style={{ color: 'var(--text)' }}>Don&apos;t have an address handy?</strong>{' '}
+              Try the Monad Foundation delegator{' '}
+              <button
+                type="button"
+                onClick={() => setInput('0xf235ab9b2f80a9569079c0d62aab91024f4dd61e')}
+                style={{
+                  background: 'transparent', border: 'none', padding: 0,
+                  color: 'var(--gold-dim)', cursor: 'pointer', textDecoration: 'underline',
+                  fontFamily: 'DM Mono, monospace', fontSize: 11,
+                }}
+                title="Pre-fill with Foundation delegator address (~266 positions / 2.79B MON)"
+              >
+                0xf235ab9b…dd61e
+              </button>
+              {' '}— it has hundreds of positions across the active set, gives you a feel for the scan output in ~1.5s.
+            </div>
+          )}
+
           {err && (
             <div className="card" style={{ padding: '12px 16px', marginBottom: 16, color: '#E05252', fontSize: 12 }}>
               {err}
