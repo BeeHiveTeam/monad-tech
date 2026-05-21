@@ -13,7 +13,8 @@ const TOPIC0_VALIDATOR_REWARDED =
 const SCAN_RANGE_BLOCKS = 100_000; // ~11 hours at 0.4s blocks — adjust if RPC limits hit
 const MAX_WINDOW_BLOCKS = 100_000; // hard cap — previously 500K, dropped to respect [[monad-rpc-pacing]]
 const CHUNK_SIZE = 1000;
-const CHUNK_PAUSE_MS = 200; // [[monad-rpc-pacing]] rule — minimum gap between eth_getLogs chunks
+const CHUNK_PAUSE_MS = 200; // [[monad-rpc-pacing]] rule — minimum gap between BATCHES of chunks
+const CHUNK_CONCURRENCY = 4; // chunks in flight per batch (stays well under monad-rpc 25-method burst limit)
 // Hard cap on logs to fetch. Independent of `limit` (display slice). 5000 is
 // plenty for 100K-block window even at 100% production rate (would be 100k×rate
 // = a few thousand). Audit-pass M2 fix: previous `limit*2` early-break tied
@@ -257,21 +258,28 @@ export async function GET(
 
     const fromBlock = Math.max(0, tip - windowBlocks);
 
-    // Fetch logs in chunks to respect RPC log-range limits. Insert CHUNK_PAUSE_MS
-    // between chunks per [[monad-rpc-pacing]] — burst patterns overflow the
-    // monad-rpc triedb_env channel and cause WARN-storm. First chunk has no
-    // pause (single curl shouldn't pay a 200ms latency floor for nothing).
+    // Fetch logs in chunks. Bug fix 2026-05-21 (Pacific Meta report): sparse
+    // validators (low production rate, don't hit HARD_FETCH_CAP) scanned 100
+    // chunks SEQUENTIALLY × ~350ms each ≈ 35s, exceeding CDN/nginx 30s timeout
+    // on the public domain. Now batches CHUNK_CONCURRENCY chunks in flight
+    // with CHUNK_PAUSE_MS between batches — same RPC pacing budget, 4× faster.
+    // Still hard-bounded by HARD_FETCH_CAP for hot validators (break drops the
+    // last partial batch, summaryComplete=false signals UI).
+    const allChunkRanges: Array<{ from: number; to: number }> = [];
+    for (let from = fromBlock; from <= tip; from += CHUNK_SIZE) {
+      allChunkRanges.push({ from, to: Math.min(from + CHUNK_SIZE - 1, tip) });
+    }
     const allLogs: RewardLog[] = [];
-    let firstChunk = true;
     let summaryComplete = true;
     let lastScannedBlock = fromBlock;
-    for (let from = fromBlock; from <= tip; from += CHUNK_SIZE) {
-      if (!firstChunk) await new Promise(r => setTimeout(r, CHUNK_PAUSE_MS));
-      firstChunk = false;
-      const to = Math.min(from + CHUNK_SIZE - 1, tip);
-      const logs = await fetchLogChunk(rpcUrl, ownedValidatorIds, from, to);
-      allLogs.push(...logs);
-      lastScannedBlock = to;
+    for (let i = 0; i < allChunkRanges.length; i += CHUNK_CONCURRENCY) {
+      if (i > 0) await new Promise(r => setTimeout(r, CHUNK_PAUSE_MS));
+      const batch = allChunkRanges.slice(i, i + CHUNK_CONCURRENCY);
+      const results = await Promise.all(
+        batch.map(({ from, to }) => fetchLogChunk(rpcUrl, ownedValidatorIds, from, to)),
+      );
+      for (const logs of results) allLogs.push(...logs);
+      lastScannedBlock = batch[batch.length - 1].to;
       if (allLogs.length >= HARD_FETCH_CAP) {
         summaryComplete = false;
         break;
