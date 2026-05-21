@@ -207,24 +207,28 @@ export function isSnapshotRotationArtifact(e: SetChangeEvent): boolean {
     return false;
   }
   // validator_removed rotation: tracker observed an address with oldStake ≈ 11M
-  // disappear from /api/validators. This is the rotation-out half of an
-  // add-back-remove cycle, not a true deregistration. Real removals tend to
-  // have oldStake either 0 (pre-staked) or significantly non-Tier-4. Updated
-  // 2026-05-21 per audit R1+R2: /incidents was showing ~71 of these per 6h,
-  // all rotation noise.
+  // (rotation-out half of add-back-remove cycle) OR oldStake = 0 (the validator
+  // was already at rotation-snapshot=0 before disappearing from the list).
+  // Real deregistrations tend to have oldStake between these — fractional or
+  // non-Tier-4 amounts. Updated 2026-05-21 per audit R1+R2: /incidents was
+  // showing ~71 of these per 6h, all rotation noise.
   if (e.type === 'removed') {
-    const old = e.oldStake ?? 0;
-    if (Math.abs(old - TIER4_STAKE) < ROTATION_TOLERANCE) return true;
+    const old = e.oldStake ?? -1;
+    if (old === 0) return true;
+    if (old > 0 && Math.abs(old - TIER4_STAKE) < ROTATION_TOLERANCE) return true;
     return false;
   }
-  // validator_added rotation: mirror of the above — newStake ≈ 11M when an
-  // operator rotates back INTO the active set. Real validator joins tend to
-  // be fresh stake amounts; canonical Tier-4 re-entry is rotation.
+  // validator_added rotation: mirror — newStake = 0 (just rotated INTO the set,
+  // snapshot not yet refreshed) OR newStake ≈ 11M (rejoining at full Tier-4).
+  // Real new validator joins land between (registered with partial stake).
   if (e.type === 'added') {
-    const nw = e.newStake ?? 0;
-    if (Math.abs(nw - TIER4_STAKE) < ROTATION_TOLERANCE) return true;
+    const nw = e.newStake ?? -1;
+    if (nw === 0) return true;
+    if (nw > 0 && Math.abs(nw - TIER4_STAKE) < ROTATION_TOLERANCE) return true;
     return false;
   }
+  // commission_change is NEVER rotation — always real (commission only changes
+  // when an operator submits a transaction). Surface all of them.
   return false;
 }
 interface ValidatorSnapshot {
