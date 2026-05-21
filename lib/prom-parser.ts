@@ -33,13 +33,49 @@ export function parsePrometheus(text: string): PromSample[] {
   return out;
 }
 
-export function findOne(
+/**
+ * Pick the metric series with the LATEST timestamp.
+ *
+ * Why this is the default behaviour (not "first match"): after a validator
+ * binary upgrade (e.g. service_version 0.14.3 → 0.14.4), the otelcol
+ * pipeline often keeps exporting BOTH label variants for a while:
+ *
+ *   monad_node_info{service_version="0.14.3", ...} 1 1779376487972  ← stale
+ *   monad_node_info{service_version="0.14.4", ...} 1 1779378854830  ← live
+ *
+ * A naive `find-first` returns whichever shows up first in the exposition
+ * format (typically the alphabetically-earlier label), which after upgrade
+ * is the OLD series. That's exactly what made /beehive read a 39-min-old
+ * timestamp and render "NODE STALE" while the new version was actively
+ * reporting — bug fixed 2026-05-21.
+ *
+ * Picking max(timestampMs) is correct for ANY metric: when there's only
+ * one series, behaviour is identical to find-first; when there are
+ * multiple (label-split, version upgrade, generation change), we always
+ * pick the freshest. No caller is harmed by the change.
+ *
+ * `findLatest` is the canonical name; `findOne` is kept as a backward-
+ * compatible alias for existing imports.
+ */
+export function findLatest(
   samples: PromSample[],
   name: string,
   filter?: (labels: Record<string, string>) => boolean,
 ): PromSample | undefined {
-  return samples.find(s => s.name === name && (!filter || filter(s.labels)));
+  let best: PromSample | undefined;
+  for (const s of samples) {
+    if (s.name !== name) continue;
+    if (filter && !filter(s.labels)) continue;
+    if (!best) { best = s; continue; }
+    const a = s.timestampMs ?? 0;
+    const b = best.timestampMs ?? 0;
+    if (a > b) best = s;
+  }
+  return best;
 }
+
+// Backward-compatible alias — now points to the latest-by-timestamp variant.
+export const findOne = findLatest;
 
 export function findAll(
   samples: PromSample[],

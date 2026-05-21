@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { apiError } from '@/lib/apiError';
-import { parsePrometheus, findOne } from '@/lib/prom-parser';
+import { parsePrometheus, findLatest } from '@/lib/prom-parser';
 
 export const dynamic = 'force-dynamic';
 
@@ -34,14 +34,14 @@ export async function GET() {
     const samples = parsePrometheus(text);
 
     // Node identity lives in labels on monad_node_info
-    const nodeInfo = findOne(samples, 'monad_node_info');
+    const nodeInfo = findLatest(samples, 'monad_node_info');
     const clientVersion = nodeInfo?.labels?.service_version ?? null;
     const serviceName = nodeInfo?.labels?.service_name ?? null;
     const network = nodeInfo?.labels?.network ?? 'testnet';
 
     // Prometheus tells us committed-to-ledger height (slightly lagged by
     // export pipeline). The RPC call above gives us the real-time tip.
-    const execLedgerHeight = findOne(samples, 'monad_execution_ledger_block_num')?.value ?? 0;
+    const execLedgerHeight = findLatest(samples, 'monad_execution_ledger_block_num')?.value ?? 0;
 
     let rpcHeight = 0;
     if (rpcRes.status === 'fulfilled' && rpcRes.value.ok) {
@@ -54,11 +54,11 @@ export async function GET() {
     // didn't respond (e.g. during a brief network blip).
     const blockNum = rpcHeight > 0 ? rpcHeight : execLedgerHeight;
 
-    const numCommits = findOne(samples, 'monad_execution_ledger_num_commits')?.value ?? 0;
-    const numTxCommits = findOne(samples, 'monad_execution_ledger_num_tx_commits')?.value ?? 0;
-    const peers = findOne(samples, 'monad_peer_disc_num_peers')?.value ?? 0;
-    const pendingPeers = findOne(samples, 'monad_peer_disc_num_pending_peers')?.value ?? 0;
-    const upstreamValidators = findOne(samples, 'monad_peer_disc_num_upstream_validators')?.value ?? 0;
+    const numCommits = findLatest(samples, 'monad_execution_ledger_num_commits')?.value ?? 0;
+    const numTxCommits = findLatest(samples, 'monad_execution_ledger_num_tx_commits')?.value ?? 0;
+    const peers = findLatest(samples, 'monad_peer_disc_num_peers')?.value ?? 0;
+    const pendingPeers = findLatest(samples, 'monad_peer_disc_num_pending_peers')?.value ?? 0;
+    const upstreamValidators = findLatest(samples, 'monad_peer_disc_num_upstream_validators')?.value ?? 0;
 
     // Sample timestamp — used as "last heartbeat from our node"
     const lastSeenMs = nodeInfo?.timestampMs ?? Date.now();
