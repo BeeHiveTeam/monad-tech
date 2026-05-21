@@ -164,7 +164,22 @@ export default function ValidatorsPage() {
 function ValidatorsPageInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const initialView: ViewMode = searchParams?.get('view') === 'delegator' ? 'delegator' : 'operator';
+  // Derive `view` directly from the URL — URL is the single source of truth.
+  // Earlier impl used useState seeded from searchParams once + a URL-sync
+  // useEffect; that fought tab-bar navigation (clicking "Validators" tab from
+  // /validators?view=delegator bounced back to delegator view because the
+  // local useState never re-read the URL). Now: clicking a tab changes URL,
+  // searchParams updates, view re-derives, table re-renders. Correct by
+  // construction.
+  const view: ViewMode = searchParams?.get('view') === 'delegator' ? 'delegator' : 'operator';
+  const setView = useCallback((next: ViewMode) => {
+    const sp = new URLSearchParams(searchParams?.toString() ?? '');
+    if (next === 'delegator') sp.set('view', 'delegator');
+    else sp.delete('view');
+    const qs = sp.toString();
+    router.push(qs ? `/validators?${qs}` : '/validators');
+  }, [router, searchParams]);
+
   const [network, setNetwork] = useNetwork();
   const [data, setData] = useState<ValidatorsData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -173,8 +188,7 @@ function ValidatorsPageInner() {
   // Consecutive-failure counter for live-state tolerance (see page.tsx comment).
   const [failCount, setFailCount] = useState(0);
   const [search, setSearch] = useState('');
-  const [view, setView] = useState<ViewMode>(initialView);
-  const [sortKey, setSortKey] = useState<SortKey>(initialView === 'delegator' ? 'pick' : 'score');
+  const [sortKey, setSortKey] = useState<SortKey>(view === 'delegator' ? 'pick' : 'score');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
   const [widths, setWidths] = useState<Record<ColKey, number>>(DEFAULT_WIDTHS);
   const [resizing, setResizing] = useState<ColKey | null>(null);
@@ -186,27 +200,19 @@ function ValidatorsPageInner() {
   const [minStake, setMinStake] = useState(0);
   const [hideWhales, setHideWhales] = useState(true);
 
-  // Keep URL in sync with view toggle (shareable links).
-  useEffect(() => {
-    const sp = new URLSearchParams(searchParams?.toString() ?? '');
-    if (view === 'delegator') sp.set('view', 'delegator');
-    else sp.delete('view');
-    const next = sp.toString();
-    const url = next ? `/validators?${next}` : '/validators';
-    if (typeof window !== 'undefined' && window.location.pathname + window.location.search !== url) {
-      router.replace(url);
-    }
-  }, [view, router, searchParams]);
-
-  // When switching INTO delegator view, also switch default sort to pick.
-  // When switching OUT, drop back to score. Don't override if user picked sort manually.
+  // When the view changes (via URL or toggle), reset the default sort. Don't
+  // override if user explicitly picked a sort relevant to the other view —
+  // we only swap when the current sort is the OTHER view's default. This way
+  // a user who sorted by Commission in operator view stays on Commission
+  // when switching to delegator view.
   const prevView = useRef<ViewMode>(view);
   useEffect(() => {
     if (prevView.current !== view) {
-      setSortKey(view === 'delegator' ? 'pick' : 'score');
+      if (view === 'delegator' && sortKey === 'score') setSortKey('pick');
+      else if (view === 'operator' && sortKey === 'pick') setSortKey('score');
       prevView.current = view;
     }
-  }, [view]);
+  }, [view, sortKey]);
 
   const toggleCompareSelect = useCallback((addr: string) => {
     setSelectedForCompare(prev => {
