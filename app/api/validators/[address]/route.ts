@@ -14,6 +14,7 @@ import {
   computeValidatorScore,
   computeAuthStake,
   computeCompositeScore,
+  computeRealizedApr,
 } from '@/lib/validatorMetrics';
 
 export const dynamic = 'force-dynamic';
@@ -170,6 +171,15 @@ export async function GET(
     // detail page's radar widget. Keeps the legacy `stats.score` field stable
     // for any external consumers; adds `compositeScore.{composite,axes}` for
     // the new view. See computeCompositeScore JSDoc for axis semantics.
+    const realizedApr = computeRealizedApr({
+      stakeMon,
+      totalActiveStake,
+      commissionPct: info?.commissionPct ?? null,
+      participationPct: m.participationPct,
+      participationLong: m.participationLong,
+      isActiveSet,
+    });
+
     const compositeScore = computeCompositeScore({
       health: m.health,
       participationPct: m.participationPct,
@@ -213,6 +223,7 @@ export async function GET(
       beneficiary: info?.validatorId ? getBeneficiaryForValidator(info.validatorId) : null,
       consensusSetSize: consensusIds.size,
       compositeScore,
+      realizedApr,
       stats: {
         health: m.health,
         score,

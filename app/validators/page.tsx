@@ -12,7 +12,7 @@ import MainnetSoonCard from '@/components/MainnetSoonCard';
 import { computeValidatorScore } from '@/lib/validatorMetrics';
 
 type Health = 'active' | 'slow' | 'missing';
-type SortKey = 'score' | 'rank' | 'health' | 'uptime' | 'blocks' | 'share' | 'txs' | 'age' | 'stake' | 'commission';
+type SortKey = 'score' | 'rank' | 'health' | 'uptime' | 'blocks' | 'share' | 'txs' | 'age' | 'stake' | 'commission' | 'apr';
 
 interface Validator {
   address: string;
@@ -28,6 +28,8 @@ interface Validator {
   stakeMon?: number;
   commissionPct?: number;
   registered?: boolean;
+  aprDelegator?: number | null;
+  aprGross?: number | null;
 }
 
 interface ValidatorsData {
@@ -57,21 +59,16 @@ const POLL_INTERVAL = 30_000;
 const POLL_INTERVAL_BUILDING = 15_000;
 
 const COL_KEYS = [
-  'select', 'num', 'moniker', 'address', 'stake', 'commission', 'score',
+  'select', 'num', 'moniker', 'address', 'stake', 'commission', 'apr', 'score',
   'health', 'uptime', 'blocks', 'share', 'txs', 'lastBlock',
 ] as const;
 type ColKey = typeof COL_KEYS[number];
 
 // Widths tuned so typical content fits without overflow.
-//   stake/commission/uptime/share — small numeric; give enough for "100.0%" etc.
-//   score — 3-digit number, small
-//   moniker — most monikers are 10-22 chars; gives 200px
-//   address — 0xabcd…1234 at 12px mono ≈ 140px
-//   blocks/txs — 5-digit numbers
-//   lastBlock — "5m" / "12h" / "3d" — small
+//   apr — "78.4%" net APR — small
 const DEFAULT_WIDTHS: Record<ColKey, number> = {
   select: 36,
-  num: 48, moniker: 200, address: 150, stake: 100, commission: 90,
+  num: 48, moniker: 200, address: 150, stake: 100, commission: 90, apr: 80,
   score: 80, health: 110, uptime: 90, blocks: 90, share: 80, txs: 100, lastBlock: 96,
 };
 // Bumped v1 → v2: widths changed; drop any stored v1 values.
@@ -275,6 +272,7 @@ export default function ValidatorsPage() {
         case 'age':        diff = b.ageSeconds - a.ageSeconds; break;
         case 'stake':      diff = (a.stakeMon ?? 0) - (b.stakeMon ?? 0); break;
         case 'commission': diff = (a.commissionPct ?? 0) - (b.commissionPct ?? 0); break;
+        case 'apr':        diff = (a.aprDelegator ?? -1) - (b.aprDelegator ?? -1); break;
       }
       if (diff === 0) {
         // Tiebreak: registered wins over unregistered, so known validators
@@ -295,7 +293,7 @@ export default function ValidatorsPage() {
     failCount >= 3 || timeSinceUpdate > 60_000 ? 'offline' :
     'live';
 
-  const RIGHT_ALIGN: SortKey[] = ['score', 'uptime', 'blocks', 'share', 'txs', 'stake', 'commission', 'age'];
+  const RIGHT_ALIGN: SortKey[] = ['score', 'uptime', 'blocks', 'share', 'txs', 'stake', 'commission', 'age', 'apr'];
   const thStyle = (key: SortKey): React.CSSProperties => ({
     textAlign: key === 'health' ? 'center' : RIGHT_ALIGN.includes(key) ? 'right' : 'left',
     whiteSpace: 'nowrap',
@@ -574,13 +572,19 @@ export default function ValidatorsPage() {
                         Comm. <SortIcon active={sortKey === 'commission'} dir={sortDir} />
                         <ResizeHandle colKey="commission" onMouseDown={startResize('commission')} active={resizing === 'commission'} />
                       </th>
+                      <th style={thStyle('apr')} onClick={() => handleSort('apr')}
+                          title="Realized delegator APR — block-reward yield against stake, net of commission. Derived from stake-share × participation × per-block reward, annualised. Testnet has ~80% APR due to inflationary rewards.">
+                        APR <SortIcon active={sortKey === 'apr'} dir={sortDir} />
+                        <ResizeHandle colKey="apr" onMouseDown={startResize('apr')} active={resizing === 'apr'} />
+                      </th>
                       <th style={thStyle('score')} onClick={() => handleSort('score')}
-                          title="Legacy 3-axis health score (health × uptime × recency). For the comprehensive 6-axis Composite Score, open the validator detail page.">
-                        Health <SortIcon active={sortKey === 'score'} dir={sortDir} />
+                          title="3-axis health score (health × uptime × recency, weighted). For the comprehensive 6-axis Composite Score, open the validator detail page.">
+                        Health Score <SortIcon active={sortKey === 'score'} dir={sortDir} />
                         <ResizeHandle colKey="score" onMouseDown={startResize('score')} active={resizing === 'score'} />
                       </th>
-                      <th style={thStyle('health')} onClick={() => handleSort('health')}>
-                        Health <SortIcon active={sortKey === 'health'} dir={sortDir} />
+                      <th style={thStyle('health')} onClick={() => handleSort('health')}
+                          title="Status badge: active (producing) / slow (>2× expected gap) / missing (>5× expected gap or zero blocks).">
+                        Status <SortIcon active={sortKey === 'health'} dir={sortDir} />
                         <ResizeHandle colKey="health" onMouseDown={startResize('health')} active={resizing === 'health'} />
                       </th>
                       <th style={thStyle('uptime')} onClick={() => handleSort('uptime')}>
@@ -697,6 +701,13 @@ export default function ValidatorsPage() {
                           <td style={{ textAlign: 'right', fontFamily: 'DM Mono, monospace', fontSize: 12, whiteSpace: 'nowrap' }}>
                             {v.commissionPct != null
                               ? <span style={{ color: v.commissionPct > 10 ? '#E8A020' : 'var(--text)' }}>{v.commissionPct.toFixed(0)}%</span>
+                              : <span style={{ color: 'var(--text-muted)' }}>—</span>}
+                          </td>
+                          {/* APR (delegator, net of commission) */}
+                          <td style={{ textAlign: 'right', fontFamily: 'DM Mono, monospace', fontSize: 12, whiteSpace: 'nowrap' }}
+                              title={v.aprGross != null ? `Gross ${v.aprGross.toFixed(1)}% · Commission ${v.commissionPct ?? 0}%` : undefined}>
+                            {v.aprDelegator != null
+                              ? <span style={{ color: 'var(--gold)' }}>{v.aprDelegator.toFixed(1)}%</span>
                               : <span style={{ color: 'var(--text-muted)' }}>—</span>}
                           </td>
                           {/* Score */}

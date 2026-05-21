@@ -6,7 +6,7 @@ import { ensureRegistryLoaded, getRegistryEntries, getConsensusIds, getChainData
 import { setBlockCache } from '@/lib/block-cache';
 import { getMinerAggregate, getAggregateState } from '@/lib/wsBlockStream';
 import { getValidatorIdForBlock, recordBeneficiary, getBeneficiaryForValidator } from '@/lib/beneficiaryMap';
-import { computeValidatorMetrics, computeTotalActiveStake, isInActiveSet, computeAuthStake } from '@/lib/validatorMetrics';
+import { computeValidatorMetrics, computeTotalActiveStake, isInActiveSet, computeAuthStake, computeRealizedApr } from '@/lib/validatorMetrics';
 
 export const dynamic = 'force-dynamic';
 
@@ -221,6 +221,18 @@ async function computeValidators(network: NetworkId) {
         cumulativeMinerBlocks: agg?.blocks ?? 0,
       });
 
+      // Realized APR derived from stake-share × participation × per-block reward.
+      // Delegator APR is what someone delegating to this validator earns net of
+      // commission. See computeRealizedApr JSDoc + memory [[validator-realized-apr]].
+      const apr = computeRealizedApr({
+        stakeMon,
+        totalActiveStake,
+        commissionPct: info?.commissionPct ?? null,
+        participationPct: m.participationPct,
+        participationLong: m.participationLong,
+        isActiveSet,
+      });
+
       return {
         ...v,
         moniker: info?.moniker ?? null,
@@ -245,6 +257,10 @@ async function computeValidators(network: NetworkId) {
         // Useful for "long-running performance" view of a validator.
         cumulativeBlocks: agg?.blocks ?? 0,
         cumulativeTxs: agg?.txs ?? 0,
+        // Realized APR: aprDelegator = net of commission (delegator earns this),
+        // aprGross = block-reward yield against stake before commission split.
+        aprDelegator: apr?.aprDelegator ?? null,
+        aprGross: apr?.aprGross ?? null,
         health: m.health,
         isNewInWindow: m.isNewInWindow,
         activeWindowSeconds: Math.round(m.activeWindowSeconds),

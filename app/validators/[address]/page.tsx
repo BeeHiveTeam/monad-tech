@@ -27,6 +27,12 @@ interface ValidatorDetail {
     commissionPct?: number;
   } | null;
   compositeScore?: CompositeScore;
+  realizedApr?: {
+    aprDelegator: number;
+    aprGross: number;
+    blocksPerYearExpected: number;
+    blocksPerYearRealized: number;
+  } | null;
   stakeMon?: number;              // auth-rolled stake across all owned IDs
   validatorIds?: number[];        // all IDs owned by this auth
   activeValidatorIdsCount?: number;
@@ -228,9 +234,12 @@ export default function ValidatorDetailPage() {
                   const stakeSub = isMultiId && perIdStake != null
                     ? `${formatStake(perIdStake)} × ${idCount} IDs [${data.validatorIds?.join(', ')}]`
                     : undefined;
+                  const apr = data.realizedApr;
                   return [
                     { label: isMultiId ? 'Auth Stake' : 'Stake', value: formatStake(authStake), sub: stakeSub },
                     { label: 'Commission', value: formatCommission(data.info?.commissionPct) },
+                    { label: 'APR (delegator)', value: apr ? `${apr.aprDelegator.toFixed(1)}%` : '—',
+                      sub: apr ? `gross ${apr.aprGross.toFixed(1)}% · ${apr.blocksPerYearRealized.toLocaleString()} blocks/y` : undefined },
                     { label: 'Blocks produced', value: data.stats.blocksProduced.toLocaleString('en-US') },
                     { label: 'Block share', value: `${data.stats.sharePct.toFixed(2)}%` },
                     { label: 'Participation', value: `${Math.min(data.stats.participationPct, 100).toFixed(0)}%`,

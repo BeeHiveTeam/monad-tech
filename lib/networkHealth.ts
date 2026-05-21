@@ -49,6 +49,9 @@ async function writeSetChangeToInflux(e: SetChangeEvent): Promise<void> {
   if (e.oldStake !== undefined) fields.push(`old_stake=${e.oldStake}`);
   if (e.newStake !== undefined) fields.push(`new_stake=${e.newStake}`);
   if (e.delta !== undefined) fields.push(`delta=${e.delta}`);
+  if (e.oldCommission !== undefined) fields.push(`old_commission=${e.oldCommission}`);
+  if (e.newCommission !== undefined) fields.push(`new_commission=${e.newCommission}`);
+  if (e.commissionDelta !== undefined) fields.push(`commission_delta=${e.commissionDelta}`);
   const line = `monad_valset_changes,network=testnet,type=${influxEscapeTag(e.type)} `
     + fields.join(',') + ' ' + e.ts;
   await influxWrite(line);
@@ -108,7 +111,7 @@ export async function fetchReorgsFromInflux(windowSeconds: number): Promise<Reor
  */
 export async function fetchSetChangesFromInflux(windowSeconds: number): Promise<SetChangeEvent[] | null> {
   try {
-    const q = `SELECT type,address,moniker,old_stake,new_stake,delta FROM monad_valset_changes `
+    const q = `SELECT type,address,moniker,old_stake,new_stake,delta,old_commission,new_commission,commission_delta FROM monad_valset_changes `
       + `WHERE network='testnet' AND time > now()-${windowSeconds}s ORDER BY time ASC`;
     const res = await fetch(
       `${INFLUX_URL}/query?db=${INFLUX_DB}&q=${encodeURIComponent(q)}&epoch=ms`,
@@ -122,7 +125,7 @@ export async function fetchSetChangesFromInflux(windowSeconds: number): Promise<
     s.columns.forEach((c, i) => { idx[c] = i; });
     return s.values.map(row => {
       const typeStr = String(row[idx.type] ?? '');
-      const validType = (['removed', 'stake_decrease', 'added'] as const).find(t => t === typeStr);
+      const validType = (['removed', 'stake_decrease', 'added', 'commission_change'] as const).find(t => t === typeStr);
       return {
         ts: Number(row[idx.time]),
         type: (validType ?? 'removed') as SetChangeEvent['type'],
@@ -131,6 +134,9 @@ export async function fetchSetChangesFromInflux(windowSeconds: number): Promise<
         oldStake: row[idx.old_stake] != null ? Number(row[idx.old_stake]) : undefined,
         newStake: row[idx.new_stake] != null ? Number(row[idx.new_stake]) : undefined,
         delta: row[idx.delta] != null ? Number(row[idx.delta]) : undefined,
+        oldCommission: row[idx.old_commission] != null ? Number(row[idx.old_commission]) : undefined,
+        newCommission: row[idx.new_commission] != null ? Number(row[idx.new_commission]) : undefined,
+        commissionDelta: row[idx.commission_delta] != null ? Number(row[idx.commission_delta]) : undefined,
       };
     });
   } catch { return null; }
@@ -162,9 +168,10 @@ export interface GeoSummary {
 }
 export interface SetChangeEvent {
   ts: number;
-  type: 'removed' | 'stake_decrease' | 'added';
+  type: 'removed' | 'stake_decrease' | 'added' | 'commission_change';
   address: string; moniker?: string;
   oldStake?: number; newStake?: number; delta?: number;
+  oldCommission?: number; newCommission?: number; commissionDelta?: number;
 }
 
 /**
@@ -189,15 +196,43 @@ export interface SetChangeEvent {
  */
 const ROTATION_DELTA = -11_000_000;
 const ROTATION_TOLERANCE = 50_000;
+const TIER4_STAKE = 11_000_000; // canonical VDP Tier-4 stake size
+
 export function isSnapshotRotationArtifact(e: SetChangeEvent): boolean {
-  if (e.type !== 'stake_decrease') return false;
-  // Crossings — exactly going from non-zero to zero, or zero to non-zero
-  if ((e.oldStake ?? 0) === 0 || (e.newStake ?? 0) === 0) return true;
-  // Canonical rotation delta — symmetric tolerance around -11M
-  if (e.delta != null && Math.abs(e.delta - ROTATION_DELTA) < ROTATION_TOLERANCE) return true;
+  // Stake-decrease rotation: snapshotStake (slot 8) dropped from 11M to 0
+  // when operator rotated out of the 200-slot active set.
+  if (e.type === 'stake_decrease') {
+    if ((e.oldStake ?? 0) === 0 || (e.newStake ?? 0) === 0) return true;
+    if (e.delta != null && Math.abs(e.delta - ROTATION_DELTA) < ROTATION_TOLERANCE) return true;
+    return false;
+  }
+  // validator_removed rotation: tracker observed an address with oldStake ≈ 11M
+  // disappear from /api/validators. This is the rotation-out half of an
+  // add-back-remove cycle, not a true deregistration. Real removals tend to
+  // have oldStake either 0 (pre-staked) or significantly non-Tier-4. Updated
+  // 2026-05-21 per audit R1+R2: /incidents was showing ~71 of these per 6h,
+  // all rotation noise.
+  if (e.type === 'removed') {
+    const old = e.oldStake ?? 0;
+    if (Math.abs(old - TIER4_STAKE) < ROTATION_TOLERANCE) return true;
+    return false;
+  }
+  // validator_added rotation: mirror of the above — newStake ≈ 11M when an
+  // operator rotates back INTO the active set. Real validator joins tend to
+  // be fresh stake amounts; canonical Tier-4 re-entry is rotation.
+  if (e.type === 'added') {
+    const nw = e.newStake ?? 0;
+    if (Math.abs(nw - TIER4_STAKE) < ROTATION_TOLERANCE) return true;
+    return false;
+  }
   return false;
 }
-interface ValidatorSnapshot { address: string; moniker?: string; stakeMon: number; }
+interface ValidatorSnapshot {
+  address: string;
+  moniker?: string;
+  stakeMon: number;
+  commissionPct?: number;
+}
 
 interface NhStore {
   blockHistory: Map<number, BlockRecord>;
@@ -598,10 +633,11 @@ export async function tickValidatorSetTracker(): Promise<void> {
       cache: 'no-store',
     });
     if (!res.ok) return;
+    type RawV = { address: string; moniker?: string; stakeMon?: number; commissionPct?: number };
     const body = await res.json() as
-      | Array<{ address: string; moniker?: string; stakeMon?: number }>
-      | { validators?: Array<{ address: string; moniker?: string; stakeMon?: number }>; building?: boolean };
-    const arr = Array.isArray(body) ? body : (body.validators ?? []);
+      | RawV[]
+      | { validators?: RawV[]; building?: boolean };
+    const arr: RawV[] = Array.isArray(body) ? body : (body.validators ?? []);
     // If the validator registry is still warming up (returns 0), skip this
     // tick — overwriting prev with an empty set would emit spurious "added"
     // events on the next real poll.
@@ -612,6 +648,7 @@ export async function tickValidatorSetTracker(): Promise<void> {
         address: v.address.toLowerCase(),
         moniker: v.moniker,
         stakeMon: Number(v.stakeMon ?? 0),
+        commissionPct: typeof v.commissionPct === 'number' ? v.commissionPct : undefined,
       });
     }
 
@@ -635,12 +672,29 @@ export async function tickValidatorSetTracker(): Promise<void> {
         const now = curr.get(addr);
         if (!now) {
           push({ ts: Date.now(), type: 'removed', address: addr, moniker: prev.moniker, oldStake: prev.stakeMon });
-        } else if (now.stakeMon < prev.stakeMon - STAKE_DROP_THRESHOLD) {
+          continue;
+        }
+        if (now.stakeMon < prev.stakeMon - STAKE_DROP_THRESHOLD) {
           push({
             ts: Date.now(), type: 'stake_decrease',
             address: addr, moniker: now.moniker,
             oldStake: prev.stakeMon, newStake: now.stakeMon,
             delta: now.stakeMon - prev.stakeMon,
+          });
+        }
+        // Commission-change detection (Phase 3 — Stakewiz-style alert source).
+        // VDP cap is 15% on Monad; a validator pushing right to the cap is a
+        // flight signal for delegators. Threshold: any change ≥0.5% (avoids
+        // floating-point precision noise from precompile decoding).
+        if (
+          prev.commissionPct != null && now.commissionPct != null &&
+          Math.abs(now.commissionPct - prev.commissionPct) >= 0.5
+        ) {
+          push({
+            ts: Date.now(), type: 'commission_change',
+            address: addr, moniker: now.moniker,
+            oldCommission: prev.commissionPct, newCommission: now.commissionPct,
+            commissionDelta: now.commissionPct - prev.commissionPct,
           });
         }
       }

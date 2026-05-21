@@ -30,7 +30,7 @@ const LOKI_URL = process.env.LOKI_URL || 'http://127.0.0.1:3100';
 export type Severity = 'info' | 'warn' | 'critical';
 export type IncidentType =
   | 'reorg'
-  | 'validator_removed' | 'validator_added' | 'stake_decrease'
+  | 'validator_removed' | 'validator_added' | 'stake_decrease' | 'commission_change'
   | 'retry_spike' | 'block_stall'
   | 'critical_log'
   | 'state_root_mismatch' | 'state_sync_active'
@@ -129,6 +129,27 @@ export async function collectValidatorSetChanges(sinceMs: number): Promise<Incid
           type: 'validator_added' as IncidentType,
           title: `New validator: ${who}`,
           detail: `Joined active set${e.newStake ? ` with ${e.newStake.toLocaleString()} MON` : ''}.`,
+          address: e.address,
+          meta: e as unknown as Record<string, unknown>,
+        };
+      }
+      if (e.type === 'commission_change') {
+        const oc = e.oldCommission ?? 0;
+        const nc = e.newCommission ?? 0;
+        const dir = nc > oc ? '↑' : '↓';
+        // Increase ≥3% or new commission > 12% (near VDP 15% cap) = critical;
+        // decrease or small change = info.
+        const sev: Severity = nc > oc && (nc - oc >= 3 || nc > 12) ? 'critical'
+          : nc > oc ? 'warn' : 'info';
+        return {
+          id: `vsc-comm-${e.address}-${e.ts}`,
+          ts: e.ts,
+          severity: sev,
+          type: 'commission_change' as IncidentType,
+          title: `Commission ${dir}: ${who} · ${oc.toFixed(1)}% → ${nc.toFixed(1)}%`,
+          detail: nc > oc
+            ? `Validator raised commission. ${nc > 12 ? 'Near VDP 15% cap. ' : ''}Delegator yield drops accordingly.`
+            : `Validator reduced commission. Delegator yield improves.`,
           address: e.address,
           meta: e as unknown as Record<string, unknown>,
         };
@@ -348,7 +369,7 @@ export async function buildIncidentFeed(
 
   const counts: Record<Severity, number> = { info: 0, warn: 0, critical: 0 };
   const byType: Record<IncidentType, number> = {
-    reorg: 0, validator_removed: 0, validator_added: 0, stake_decrease: 0,
+    reorg: 0, validator_removed: 0, validator_added: 0, stake_decrease: 0, commission_change: 0,
     retry_spike: 0, block_stall: 0, critical_log: 0,
     state_root_mismatch: 0, state_sync_active: 0,
     consensus_stress: 0, vote_delay_high: 0, tip_lag: 0, exec_lag: 0,

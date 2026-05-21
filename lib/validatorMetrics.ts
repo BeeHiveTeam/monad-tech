@@ -254,6 +254,73 @@ function round1(x: number): number {
 }
 
 /**
+ * Realized APR derived from on-chain observation (not protocol parameters).
+ *
+ * On Monad each produced block emits a `ValidatorRewarded` event carrying the
+ * delegator-pool share = `25 × (1 − commission)`. The validator's beneficiary
+ * receives the commission portion directly via block.miner.
+ *
+ * Method: use the stake-weighted expected block rate × participation factor
+ * × per-block reward, annualised over a year of 0.4s blocks.
+ *
+ *   blocks_per_year_expected = (stakeShare × BLOCKS_PER_YEAR)
+ *   blocks_per_year_realized = expected × (participationLong ?? participationPct ?? 100) / 100
+ *   gross_rewards            = blocks_per_year_realized × 25
+ *   delegator_rewards        = blocks_per_year_realized × 25 × (1 − commission/100)
+ *   apr_gross_pct            = gross_rewards / stake × 100
+ *   apr_delegator_pct        = delegator_rewards / stake × 100  (= what a delegator earns)
+ *   apr_validator_commission = blocks_per_year_realized × 25 × commission/100  (commission flow)
+ *
+ * Note: Uses `participationLong` when available (cumulative WS aggregator, days
+ * of data) because the 500-block sample window introduces ~5σ noise. Falls back
+ * to short-window participation when long-window isn't populated yet (cold start).
+ *
+ * Returns null when stake/share is zero (inactive validator — no APR to report).
+ */
+export interface RealizedAprInput {
+  stakeMon: number | null;
+  totalActiveStake: number;
+  commissionPct: number | null;     // 0..100
+  participationPct: number | null;  // 500-block window, may be > 100 for lucky validators
+  participationLong: number | null; // long-window, more stable
+  isActiveSet: boolean;
+}
+
+export interface RealizedAprOutput {
+  aprDelegator: number;  // what a delegator earns (after commission)
+  aprGross: number;      // gross block-reward yield against stake
+  blocksPerYearExpected: number;
+  blocksPerYearRealized: number;
+}
+
+const BLOCKS_PER_YEAR = 365 * 24 * 60 * 60 / 0.4; // 78,840,000 at 0.4s blocks
+const REWARD_PER_BLOCK_MON = 25;                  // canonical protocol reward
+
+export function computeRealizedApr(input: RealizedAprInput): RealizedAprOutput | null {
+  if (!input.isActiveSet) return null;
+  if (!input.stakeMon || input.stakeMon <= 0) return null;
+  if (input.totalActiveStake <= 0) return null;
+  const stakeShare = input.stakeMon / input.totalActiveStake;
+  const blocksPerYearExpected = stakeShare * BLOCKS_PER_YEAR;
+  // Prefer long-window participation; fall back to short-window; default 100%
+  // (= producing at exactly expected rate, neutral assumption when no data).
+  const participationFactor = (input.participationLong ?? input.participationPct ?? 100) / 100;
+  // Cap participation factor at 2.0 — sampling-luck spikes (e.g. 300%) should
+  // not project to 3× APR. Real long-term variance is ≤30%; cap is loose.
+  const cappedFactor = Math.min(participationFactor, 2.0);
+  const blocksPerYearRealized = blocksPerYearExpected * cappedFactor;
+  const commission = Math.max(0, Math.min(100, input.commissionPct ?? 0)) / 100;
+  const aprGross = (blocksPerYearRealized * REWARD_PER_BLOCK_MON) / input.stakeMon * 100;
+  const aprDelegator = aprGross * (1 - commission);
+  return {
+    aprDelegator: round1(aprDelegator),
+    aprGross: round1(aprGross),
+    blocksPerYearExpected: Math.round(blocksPerYearExpected),
+    blocksPerYearRealized: Math.round(blocksPerYearRealized),
+  };
+}
+
+/**
  * Six-axis composite score (Stakewiz Wiz-Score / Rated RAVER / Trillium-inspired).
  * Each axis is 0–100; composite is a weighted mean. Axes are exposed separately
  * so the UI can render a radar chart and operators can see *why* their score

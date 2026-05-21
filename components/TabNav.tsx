@@ -13,6 +13,7 @@ interface Tab {
 const TABS: Tab[] = [
   { label: 'Network Status', href: '/' },
   { label: 'Validators', href: '/validators' },
+  { label: 'Delegate', href: '/delegate', badge: 'NEW' },
   { label: 'Network Health', href: '/network' },
   { label: 'Incidents', href: '/incidents' },
   { label: 'Tools', href: '/tools' },
