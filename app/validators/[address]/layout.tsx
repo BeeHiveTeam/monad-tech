@@ -11,9 +11,12 @@ export async function generateMetadata(
   const safeAddr = /^0x[a-f0-9]{40}$/i.test(address) ? address.toLowerCase() : '0x';
   const short = `${safeAddr.slice(0, 10)}…${safeAddr.slice(-4)}`;
   return {
-    // Root layout's title.template adds "· Monad Tech" — keep this clean
-    // (bug B1, audit 2026-05-21).
-    title: `Validator ${short}`,
+    // Root layout's title.template `"%s · Monad Tech"` doesn't auto-apply to
+    // generateMetadata strings in deeply-nested layouts (Next.js quirk).
+    // Set title.absolute explicitly with the suffix to keep tabs readable.
+    title: {
+      absolute: `Validator ${short} · Monad Tech`,
+    },
     description: `Stake, commission, uptime, block production, on-chain delegators and composite 6-axis score for Monad validator ${short}. Live from the staking precompile.`,
     alternates: {
       canonical: `https://monad-tech.com/validators/${safeAddr}`,
