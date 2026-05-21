@@ -1,6 +1,6 @@
 'use client';
-import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { useRouter } from 'next/navigation';
+import { useState, useEffect, useCallback, useRef, useMemo, Suspense } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import HexBg from '@/components/HexBg';
 import SiteHeader from '@/components/SiteHeader';
@@ -12,7 +12,8 @@ import MainnetSoonCard from '@/components/MainnetSoonCard';
 import { computeValidatorScore } from '@/lib/validatorMetrics';
 
 type Health = 'active' | 'slow' | 'missing';
-type SortKey = 'score' | 'rank' | 'health' | 'uptime' | 'blocks' | 'share' | 'txs' | 'age' | 'stake' | 'commission' | 'apr';
+type ViewMode = 'operator' | 'delegator';
+type SortKey = 'score' | 'rank' | 'health' | 'uptime' | 'blocks' | 'share' | 'txs' | 'age' | 'stake' | 'commission' | 'apr' | 'pick';
 
 interface Validator {
   address: string;
@@ -30,6 +31,8 @@ interface Validator {
   registered?: boolean;
   aprDelegator?: number | null;
   aprGross?: number | null;
+  participationLong?: number | null;
+  isActiveSet?: boolean;
 }
 
 interface ValidatorsData {
@@ -59,16 +62,22 @@ const POLL_INTERVAL = 30_000;
 const POLL_INTERVAL_BUILDING = 15_000;
 
 const COL_KEYS = [
-  'select', 'num', 'moniker', 'address', 'stake', 'commission', 'apr', 'score',
+  'select', 'num', 'moniker', 'address', 'stake', 'commission', 'apr', 'pick', 'score',
   'health', 'uptime', 'blocks', 'share', 'txs', 'lastBlock',
 ] as const;
 type ColKey = typeof COL_KEYS[number];
 
+// Operator-only columns hidden in delegator view (R-merge audit 2026-05-21).
+// pick is the inverse — only shown in delegator view.
+const OPERATOR_ONLY_COLS: ReadonlySet<ColKey> = new Set<ColKey>(['score', 'health', 'blocks', 'txs', 'lastBlock']);
+const DELEGATOR_ONLY_COLS: ReadonlySet<ColKey> = new Set<ColKey>(['pick']);
+
 // Widths tuned so typical content fits without overflow.
-//   apr — "78.4%" net APR — small
+//   apr  — "78.4%" net APR — small
+//   pick — "84.4"  delegator-composite — small
 const DEFAULT_WIDTHS: Record<ColKey, number> = {
   select: 36,
-  num: 48, moniker: 200, address: 150, stake: 100, commission: 90, apr: 80,
+  num: 48, moniker: 200, address: 150, stake: 100, commission: 90, apr: 80, pick: 80,
   score: 80, health: 110, uptime: 90, blocks: 90, share: 80, txs: 100, lastBlock: 96,
 };
 // Bumped v1 → v2: widths changed; drop any stored v1 values.
@@ -96,6 +105,38 @@ function calcScore(v: Validator, expectedGapSeconds: number): number {
   });
 }
 
+/**
+ * Delegator-facing composite (moved here from former /delegate page when it
+ * was merged into /validators as a view mode 2026-05-21).
+ *
+ *   pick = aprDelegator × healthFactor × decentralizationBonus
+ *
+ *   healthFactor:
+ *     active + participationLong ≥ 90%  → 1.00
+ *     slow OR participation 70-90%      → 0.80
+ *     missing OR participation < 70%    → 0.30
+ *
+ *   decentralizationBonus:
+ *     stakeShare < 0.5% → 1.10   (reward picking small operator)
+ *     < 2%              → 1.00
+ *     < 5%              → 0.85
+ *     ≥ 5%              → 0.60   (whale, penalised)
+ */
+function pickScore(v: Validator, totalStake: number): number {
+  if (!v.aprDelegator || !v.isActiveSet) return 0;
+  const part = v.participationLong ?? v.participationPct ?? 100;
+  const healthFactor =
+    v.health === 'active' && part >= 90 ? 1.0 :
+    v.health === 'missing' || part < 70 ? 0.3 :
+    0.8;
+  const share = totalStake > 0 ? (v.stakeMon ?? 0) / totalStake * 100 : 0;
+  const decFactor =
+    share < 0.5 ? 1.10 :
+    share < 2   ? 1.00 :
+    share < 5   ? 0.85 : 0.60;
+  return v.aprDelegator * healthFactor * decFactor;
+}
+
 function scoreColor(score: number): string {
   if (score >= 75) return '#4CAF6E';
   if (score >= 45) return '#C9A84C';
@@ -110,8 +151,20 @@ function SortIcon({ active, dir }: { active: boolean; dir: 'asc' | 'desc' }) {
   );
 }
 
+// useSearchParams() requires a Suspense boundary for static prerender in Next 15.
+// Wrap the inner page so the build doesn't bail.
 export default function ValidatorsPage() {
+  return (
+    <Suspense fallback={null}>
+      <ValidatorsPageInner />
+    </Suspense>
+  );
+}
+
+function ValidatorsPageInner() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const initialView: ViewMode = searchParams?.get('view') === 'delegator' ? 'delegator' : 'operator';
   const [network, setNetwork] = useNetwork();
   const [data, setData] = useState<ValidatorsData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -120,13 +173,40 @@ export default function ValidatorsPage() {
   // Consecutive-failure counter for live-state tolerance (see page.tsx comment).
   const [failCount, setFailCount] = useState(0);
   const [search, setSearch] = useState('');
-  const [sortKey, setSortKey] = useState<SortKey>('score');
+  const [view, setView] = useState<ViewMode>(initialView);
+  const [sortKey, setSortKey] = useState<SortKey>(initialView === 'delegator' ? 'pick' : 'score');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
   const [widths, setWidths] = useState<Record<ColKey, number>>(DEFAULT_WIDTHS);
   const [resizing, setResizing] = useState<ColKey | null>(null);
   const [page, setPage] = useState(1);
   const [hideUnregistered, setHideUnregistered] = useState(false);
   const [selectedForCompare, setSelectedForCompare] = useState<string[]>([]);
+  // Delegator-view filters (used only when view === 'delegator')
+  const [maxCommission, setMaxCommission] = useState(15);
+  const [minStake, setMinStake] = useState(0);
+  const [hideWhales, setHideWhales] = useState(true);
+
+  // Keep URL in sync with view toggle (shareable links).
+  useEffect(() => {
+    const sp = new URLSearchParams(searchParams?.toString() ?? '');
+    if (view === 'delegator') sp.set('view', 'delegator');
+    else sp.delete('view');
+    const next = sp.toString();
+    const url = next ? `/validators?${next}` : '/validators';
+    if (typeof window !== 'undefined' && window.location.pathname + window.location.search !== url) {
+      router.replace(url);
+    }
+  }, [view, router, searchParams]);
+
+  // When switching INTO delegator view, also switch default sort to pick.
+  // When switching OUT, drop back to score. Don't override if user picked sort manually.
+  const prevView = useRef<ViewMode>(view);
+  useEffect(() => {
+    if (prevView.current !== view) {
+      setSortKey(view === 'delegator' ? 'pick' : 'score');
+      prevView.current = view;
+    }
+  }, [view]);
 
   const toggleCompareSelect = useCallback((addr: string) => {
     setSelectedForCompare(prev => {
@@ -244,25 +324,40 @@ export default function ValidatorsPage() {
   const processed = useMemo(() => {
     if (!data?.validators) return [];
     const exp = data.expectedGapSeconds || 1;
+    const totalActiveStake = data.validators.reduce((s, v) => s + (v.isActiveSet ? (v.stakeMon ?? 0) : 0), 0);
 
-    const withScore = data.validators.map(v => ({
+    const withScores = data.validators.map(v => ({
       ...v,
       score: calcScore(v, exp),
+      pick: pickScore(v, totalActiveStake),
     }));
 
     const q = search.trim().toLowerCase();
     let filtered = q
-      ? withScore.filter(v =>
+      ? withScores.filter(v =>
           v.address.toLowerCase().includes(q) ||
           (v.moniker ?? '').toLowerCase().includes(q)
         )
-      : withScore;
+      : withScores;
     if (hideUnregistered) filtered = filtered.filter(v => v.registered !== false);
+
+    // Delegator-view filters — active set only, commission cap, min stake,
+    // optional whale exclusion. These are no-ops in operator view.
+    if (view === 'delegator') {
+      filtered = filtered.filter(v => v.isActiveSet);
+      if (maxCommission < 100) filtered = filtered.filter(v => (v.commissionPct ?? 100) <= maxCommission);
+      if (minStake > 0)        filtered = filtered.filter(v => (v.stakeMon ?? 0) >= minStake);
+      if (hideWhales)          filtered = filtered.filter(v => {
+        const share = totalActiveStake > 0 ? (v.stakeMon ?? 0) / totalActiveStake * 100 : 0;
+        return share < 5;
+      });
+    }
 
     return [...filtered].sort((a, b) => {
       let diff = 0;
       switch (sortKey) {
         case 'score':   diff = a.score - b.score; break;
+        case 'pick':    diff = a.pick - b.pick; break;
         case 'rank':    diff = b.blocksProduced - a.blocksProduced; break; // original rank
         case 'health':  diff = HEALTH_ORDER[a.health] - HEALTH_ORDER[b.health]; break;
         case 'uptime':  diff = a.participationPct - b.participationPct; break;
@@ -283,7 +378,7 @@ export default function ValidatorsPage() {
       }
       return sortDir === 'desc' ? -diff : diff;
     });
-  }, [data, search, sortKey, sortDir, hideUnregistered]);
+  }, [data, search, sortKey, sortDir, hideUnregistered, view, maxCommission, minStake, hideWhales]);
 
   const explorer = NETWORKS[network].explorer;
   // Tolerant of single transient failures — same pattern as home page.
@@ -406,6 +501,32 @@ export default function ValidatorsPage() {
                 justifyContent: 'space-between', flexWrap: 'wrap',
               }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                  {/* View-mode toggle. Operator (default) = full operator-centric
+                      columns. Delegator = APR-ranked picker (was /delegate page
+                      until 2026-05-21 audit, then merged here as a view mode). */}
+                  <div role="tablist" aria-label="View mode" style={{
+                    display: 'inline-flex', height: 28, borderRadius: 6,
+                    border: '1px solid var(--gold-dim)', overflow: 'hidden',
+                  }}>
+                    {(['operator', 'delegator'] as const).map(mode => (
+                      <button
+                        key={mode}
+                        role="tab"
+                        aria-selected={view === mode}
+                        onClick={() => setView(mode)}
+                        style={{
+                          height: 28, padding: '0 14px',
+                          fontSize: 10, letterSpacing: '0.08em',
+                          background: view === mode ? 'var(--gold-dim)' : 'transparent',
+                          color: view === mode ? 'var(--bg)' : 'var(--gold-dim)',
+                          border: 'none', cursor: 'pointer',
+                          fontFamily: 'DM Mono, monospace',
+                          textTransform: 'uppercase',
+                        }}>
+                        {mode === 'operator' ? 'OPERATOR' : 'DELEGATOR'}
+                      </button>
+                    ))}
+                  </div>
                   <button
                     onClick={() => setHideUnregistered(!hideUnregistered)}
                     title="Hide block producers whose miner address isn't in the staking precompile (separate signing key → stake info unavailable)"
@@ -522,6 +643,48 @@ export default function ValidatorsPage() {
                   onBlur={e => (e.target.style.borderColor = 'var(--border)')}
                 />
               </div>
+
+              {/* Tier 3: delegator-only filters. Hidden in operator view to keep
+                  the operator UI uncluttered. Used to be /delegate page filters;
+                  merged here via the view toggle (audit 2026-05-21). */}
+              {view === 'delegator' && (
+                <div style={{
+                  display: 'flex', gap: 18, alignItems: 'center', flexWrap: 'wrap',
+                  paddingTop: 12, borderTop: '1px solid var(--border)',
+                  fontSize: 12,
+                }}>
+                  <span style={{ color: 'var(--gold)', letterSpacing: '0.06em', fontSize: 11 }}>
+                    DELEGATOR PICKER:
+                  </span>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{ color: 'var(--text-muted)' }}>Max commission</span>
+                    <select value={maxCommission} onChange={e => setMaxCommission(Number(e.target.value))}
+                      style={{ background: 'transparent', color: 'var(--gold)', border: '1px solid var(--gold-dim)', padding: '3px 8px', borderRadius: 3, fontSize: 12 }}>
+                      <option value={5}>5%</option>
+                      <option value={10}>10%</option>
+                      <option value={15}>15% (VDP cap)</option>
+                      <option value={100}>any</option>
+                    </select>
+                  </label>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{ color: 'var(--text-muted)' }}>Min stake</span>
+                    <select value={minStake} onChange={e => setMinStake(Number(e.target.value))}
+                      style={{ background: 'transparent', color: 'var(--gold)', border: '1px solid var(--gold-dim)', padding: '3px 8px', borderRadius: 3, fontSize: 12 }}>
+                      <option value={0}>any</option>
+                      <option value={1_000_000}>1M MON</option>
+                      <option value={10_000_000}>10M MON (Tier-4)</option>
+                      <option value={25_000_000}>25M MON</option>
+                    </select>
+                  </label>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+                    <input type="checkbox" checked={hideWhales} onChange={e => setHideWhales(e.target.checked)} />
+                    <span style={{ color: 'var(--text-muted)' }}>Hide whales (≥5% stake)</span>
+                  </label>
+                  <span style={{ marginLeft: 'auto', color: 'var(--text-muted)', fontSize: 11 }}>
+                    Ranked by <strong style={{ color: 'var(--gold)' }}>PICK</strong> = net APR × health × decentralization-bonus
+                  </span>
+                </div>
+              )}
             </div>
 
             {(loading && !data) || data?.building ? (
@@ -535,14 +698,21 @@ export default function ValidatorsPage() {
               <div style={{ padding: '60px 0', textAlign: 'center', color: 'var(--text-muted)', fontSize: 13 }}>
                 {search ? `No validators match "${search}"` : 'No validator data available'}
               </div>
-            ) : (
+            ) : (() => {
+              const visibleCols: readonly ColKey[] = COL_KEYS.filter(k => {
+                if (view === 'delegator' && OPERATOR_ONLY_COLS.has(k)) return false;
+                if (view === 'operator'  && DELEGATOR_ONLY_COLS.has(k)) return false;
+                return true;
+              });
+              const tableWidth = visibleCols.reduce((a, k) => a + widths[k], 0);
+              return (
               <div style={{ overflowX: 'auto' }}>
                 <table
                   className="resizable-table"
-                  style={{ width: Object.values(widths).reduce((a, b) => a + b, 0) }}
+                  style={{ width: tableWidth }}
                 >
                   <colgroup>
-                    {COL_KEYS.map(k => <col key={k} style={{ width: widths[k] }} />)}
+                    {visibleCols.map(k => <col key={k} style={{ width: widths[k] }} />)}
                   </colgroup>
                   <thead>
                     <tr>
@@ -577,36 +747,53 @@ export default function ValidatorsPage() {
                         APR <SortIcon active={sortKey === 'apr'} dir={sortDir} />
                         <ResizeHandle colKey="apr" onMouseDown={startResize('apr')} active={resizing === 'apr'} />
                       </th>
-                      <th style={thStyle('score')} onClick={() => handleSort('score')}
-                          title="3-axis health score (health × uptime × recency, weighted). For the comprehensive 6-axis Composite Score, open the validator detail page.">
-                        Health Score <SortIcon active={sortKey === 'score'} dir={sortDir} />
-                        <ResizeHandle colKey="score" onMouseDown={startResize('score')} active={resizing === 'score'} />
-                      </th>
-                      <th style={thStyle('health')} onClick={() => handleSort('health')}
-                          title="Status badge: active (producing) / slow (>2× expected gap) / missing (>5× expected gap or zero blocks).">
-                        Status <SortIcon active={sortKey === 'health'} dir={sortDir} />
-                        <ResizeHandle colKey="health" onMouseDown={startResize('health')} active={resizing === 'health'} />
-                      </th>
+                      {view === 'delegator' && (
+                        <th style={thStyle('pick')} onClick={() => handleSort('pick')}
+                            title="Delegator-facing pick score: net APR × health-factor × decentralization-bonus. Small operators (<0.5% share) get +10%, whales (≥5%) lose 40%. Highest = best pick for a delegator who wants yield + decentralization.">
+                          Pick <SortIcon active={sortKey === 'pick'} dir={sortDir} />
+                          <ResizeHandle colKey="pick" onMouseDown={startResize('pick')} active={resizing === 'pick'} />
+                        </th>
+                      )}
+                      {view === 'operator' && (
+                        <th style={thStyle('score')} onClick={() => handleSort('score')}
+                            title="3-axis health score (health × uptime × recency, weighted). For the comprehensive 6-axis Composite Score, open the validator detail page.">
+                          Health Score <SortIcon active={sortKey === 'score'} dir={sortDir} />
+                          <ResizeHandle colKey="score" onMouseDown={startResize('score')} active={resizing === 'score'} />
+                        </th>
+                      )}
+                      {view === 'operator' && (
+                        <th style={thStyle('health')} onClick={() => handleSort('health')}
+                            title="Status badge: active (producing) / slow (>2× expected gap) / missing (>5× expected gap or zero blocks).">
+                          Status <SortIcon active={sortKey === 'health'} dir={sortDir} />
+                          <ResizeHandle colKey="health" onMouseDown={startResize('health')} active={resizing === 'health'} />
+                        </th>
+                      )}
                       <th style={thStyle('uptime')} onClick={() => handleSort('uptime')}>
                         Uptime <SortIcon active={sortKey === 'uptime'} dir={sortDir} />
                         <ResizeHandle colKey="uptime" onMouseDown={startResize('uptime')} active={resizing === 'uptime'} />
                       </th>
-                      <th style={thStyle('blocks')} onClick={() => handleSort('blocks')}>
-                        Blocks <SortIcon active={sortKey === 'blocks'} dir={sortDir} />
-                        <ResizeHandle colKey="blocks" onMouseDown={startResize('blocks')} active={resizing === 'blocks'} />
-                      </th>
+                      {view === 'operator' && (
+                        <th style={thStyle('blocks')} onClick={() => handleSort('blocks')}>
+                          Blocks <SortIcon active={sortKey === 'blocks'} dir={sortDir} />
+                          <ResizeHandle colKey="blocks" onMouseDown={startResize('blocks')} active={resizing === 'blocks'} />
+                        </th>
+                      )}
                       <th style={thStyle('share')} onClick={() => handleSort('share')}>
                         Share <SortIcon active={sortKey === 'share'} dir={sortDir} />
                         <ResizeHandle colKey="share" onMouseDown={startResize('share')} active={resizing === 'share'} />
                       </th>
-                      <th style={thStyle('txs')} onClick={() => handleSort('txs')}>
-                        Txs <SortIcon active={sortKey === 'txs'} dir={sortDir} />
-                        <ResizeHandle colKey="txs" onMouseDown={startResize('txs')} active={resizing === 'txs'} />
-                      </th>
-                      <th style={thStyle('age')} onClick={() => handleSort('age')}>
-                        Last Block <SortIcon active={sortKey === 'age'} dir={sortDir} />
-                        <ResizeHandle colKey="lastBlock" onMouseDown={startResize('lastBlock')} active={resizing === 'lastBlock'} />
-                      </th>
+                      {view === 'operator' && (
+                        <th style={thStyle('txs')} onClick={() => handleSort('txs')}>
+                          Txs <SortIcon active={sortKey === 'txs'} dir={sortDir} />
+                          <ResizeHandle colKey="txs" onMouseDown={startResize('txs')} active={resizing === 'txs'} />
+                        </th>
+                      )}
+                      {view === 'operator' && (
+                        <th style={thStyle('age')} onClick={() => handleSort('age')}>
+                          Last Block <SortIcon active={sortKey === 'age'} dir={sortDir} />
+                          <ResizeHandle colKey="lastBlock" onMouseDown={startResize('lastBlock')} active={resizing === 'lastBlock'} />
+                        </th>
+                      )}
                     </tr>
                   </thead>
                   <tbody>
@@ -710,34 +897,46 @@ export default function ValidatorsPage() {
                               ? <span style={{ color: 'var(--gold)' }}>{v.aprDelegator.toFixed(1)}%</span>
                               : <span style={{ color: 'var(--text-muted)' }}>—</span>}
                           </td>
-                          {/* Score */}
-                          <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
-                            <span
-                              title={`Health ${v.health} · Uptime ${Math.min(v.participationPct, 100).toFixed(0)}%`}
-                              style={{
-                                fontFamily: 'Bebas Neue, sans-serif', fontSize: 16,
-                                color: scColor, letterSpacing: '0.04em',
-                              }}
-                            >
-                              {sc}
-                            </span>
-                          </td>
-                          {/* Health */}
-                          <td style={{ textAlign: 'center', whiteSpace: 'nowrap' }}>
-                            <span
-                              title={`Last block ${v.ageSeconds}s ago`}
-                              style={{
-                                display: 'inline-flex', alignItems: 'center', gap: 6,
-                                padding: '3px 10px', borderRadius: 12,
-                                background: hs.bg, color: hs.fg,
-                                fontSize: 10, letterSpacing: '0.08em', fontWeight: 500,
-                                border: `1px solid ${hs.fg}33`,
-                              }}
-                            >
-                              <span style={{ width: 6, height: 6, borderRadius: '50%', background: hs.fg }} />
-                              {hs.label}
-                            </span>
-                          </td>
+                          {/* Pick (delegator-only) */}
+                          {view === 'delegator' && (
+                            <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                              {v.pick > 0
+                                ? <span style={{ fontFamily: 'Bebas Neue, sans-serif', fontSize: 16, color: 'var(--gold)', letterSpacing: '0.04em' }}>{v.pick.toFixed(1)}</span>
+                                : <span style={{ color: 'var(--text-muted)' }}>—</span>}
+                            </td>
+                          )}
+                          {/* Health Score (operator-only) */}
+                          {view === 'operator' && (
+                            <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                              <span
+                                title={`Health ${v.health} · Uptime ${Math.min(v.participationPct, 100).toFixed(0)}%`}
+                                style={{
+                                  fontFamily: 'Bebas Neue, sans-serif', fontSize: 16,
+                                  color: scColor, letterSpacing: '0.04em',
+                                }}
+                              >
+                                {sc}
+                              </span>
+                            </td>
+                          )}
+                          {/* Status (operator-only) */}
+                          {view === 'operator' && (
+                            <td style={{ textAlign: 'center', whiteSpace: 'nowrap' }}>
+                              <span
+                                title={`Last block ${v.ageSeconds}s ago`}
+                                style={{
+                                  display: 'inline-flex', alignItems: 'center', gap: 6,
+                                  padding: '3px 10px', borderRadius: 12,
+                                  background: hs.bg, color: hs.fg,
+                                  fontSize: 10, letterSpacing: '0.08em', fontWeight: 500,
+                                  border: `1px solid ${hs.fg}33`,
+                                }}
+                              >
+                                <span style={{ width: 6, height: 6, borderRadius: '50%', background: hs.fg }} />
+                                {hs.label}
+                              </span>
+                            </td>
+                          )}
                           {/* Uptime */}
                           <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
                             <span
@@ -747,24 +946,30 @@ export default function ValidatorsPage() {
                               {uptimeDisplay.toFixed(0)}%
                             </span>
                           </td>
-                          {/* Blocks */}
-                          <td style={{ textAlign: 'right', fontFamily: 'DM Mono, monospace', fontSize: 13, whiteSpace: 'nowrap' }}>
-                            {v.blocksProduced.toLocaleString('en-US')}
-                          </td>
+                          {/* Blocks (operator-only) */}
+                          {view === 'operator' && (
+                            <td style={{ textAlign: 'right', fontFamily: 'DM Mono, monospace', fontSize: 13, whiteSpace: 'nowrap' }}>
+                              {v.blocksProduced.toLocaleString('en-US')}
+                            </td>
+                          )}
                           {/* Share */}
                           <td style={{ textAlign: 'right', fontFamily: 'DM Mono, monospace', fontSize: 12, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
                             {v.sharePct.toFixed(1)}%
                           </td>
-                          {/* Txs */}
-                          <td style={{ textAlign: 'right', fontFamily: 'DM Mono, monospace', fontSize: 13, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
-                            {v.totalTxs.toLocaleString('en-US')}
-                          </td>
-                          {/* Last Block */}
-                          <td style={{ whiteSpace: 'nowrap', textAlign: 'right', fontFamily: 'DM Mono, monospace', fontSize: 12, color: 'var(--text-muted)' }}>
-                            {v.lastBlockTs
-                              ? <span title={new Date(v.lastBlockTs * 1000).toLocaleString()}>{shortAge(v.ageSeconds)}</span>
-                              : '—'}
-                          </td>
+                          {/* Txs (operator-only) */}
+                          {view === 'operator' && (
+                            <td style={{ textAlign: 'right', fontFamily: 'DM Mono, monospace', fontSize: 13, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
+                              {v.totalTxs.toLocaleString('en-US')}
+                            </td>
+                          )}
+                          {/* Last Block (operator-only) */}
+                          {view === 'operator' && (
+                            <td style={{ whiteSpace: 'nowrap', textAlign: 'right', fontFamily: 'DM Mono, monospace', fontSize: 12, color: 'var(--text-muted)' }}>
+                              {v.lastBlockTs
+                                ? <span title={new Date(v.lastBlockTs * 1000).toLocaleString()}>{shortAge(v.ageSeconds)}</span>
+                                : '—'}
+                            </td>
+                          )}
                         </tr>
                       );
                     })}
@@ -786,7 +991,8 @@ export default function ValidatorsPage() {
                   </div>
                 )}
               </div>
-            )}
+              );
+            })()}
 
             <div style={{ marginTop: 16, paddingTop: 12, borderTop: '1px solid var(--border)', fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.7 }}>
               <div style={{ marginBottom: 6 }}>

@@ -1,7 +1,7 @@
 'use client';
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
-import { useEffect, useRef, useState } from 'react';
+import { usePathname, useSearchParams } from 'next/navigation';
+import { Suspense, useEffect, useRef, useState } from 'react';
 
 interface Tab {
   label: string;
@@ -13,7 +13,7 @@ interface Tab {
 const TABS: Tab[] = [
   { label: 'Network Status', href: '/' },
   { label: 'Validators', href: '/validators' },
-  { label: 'Delegate', href: '/delegate', badge: 'NEW' },
+  { label: 'Delegate', href: '/validators?view=delegator', badge: 'NEW' },
   { label: 'My Delegations', href: '/my-delegations', badge: 'NEW' },
   { label: 'Network Health', href: '/network' },
   { label: 'Incidents', href: '/incidents' },
@@ -21,8 +21,20 @@ const TABS: Tab[] = [
   { label: 'BeeHive', href: '/beehive', badge: 'OPERATOR' },
 ];
 
+// useSearchParams requires a Suspense boundary in Next 15 to avoid bailing
+// the page out of static rendering — wrap the inner component.
 export default function TabNav() {
+  return (
+    <Suspense fallback={<div style={{ minHeight: 50 }} />}>
+      <TabNavInner />
+    </Suspense>
+  );
+}
+
+function TabNavInner() {
   const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const view = searchParams?.get('view');
   const navRef = useRef<HTMLDivElement | null>(null);
   const activeRef = useRef<HTMLDivElement | null>(null);
   const [fades, setFades] = useState({ left: false, right: false });
@@ -61,10 +73,18 @@ export default function TabNav() {
       msOverflowStyle: 'none',       // IE/Edge
     }}>
       {TABS.map((tab) => {
-        // Tools tab is active for the hub `/tools` AND any sub-route `/tools/*`.
-        // Other tabs use exact match to avoid accidental highlighting.
+        // Tab matching logic:
+        //  - /tools highlights for hub and sub-routes
+        //  - /validators?view=delegator highlights the "Delegate" tab, plain
+        //    /validators highlights the "Validators" tab — disambiguated by
+        //    inspecting the `?view` query param
+        //  - everything else uses exact pathname match
         const isActive = tab.href === '/tools'
           ? (pathname === '/tools' || pathname.startsWith('/tools/'))
+          : tab.href === '/validators?view=delegator'
+            ? (pathname === '/validators' && view === 'delegator')
+          : tab.href === '/validators'
+            ? (pathname === '/validators' && view !== 'delegator')
           : pathname === tab.href;
         const content = (
           <div ref={isActive ? activeRef : undefined} className="tab-link" style={{

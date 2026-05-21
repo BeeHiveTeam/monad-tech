@@ -1,23 +1,15 @@
 import type { Metadata } from 'next';
 
+// Kept after the page became a redirect to /validators?view=delegator (audit
+// 2026-05-21) so external "monad-tech.com/delegate" links still surface
+// reasonable SEO metadata in unfurls before the redirect fires.
 export const metadata: Metadata = {
   title: 'Delegate — pick a validator for Monad delegation · Monad Tech',
   description:
-    'Find the best Monad validator for your delegation. Filters by net APR, commission, ' +
-    'stake size, decentralization. Ranks validators with a delegator-facing composite ' +
-    'score: realized APR × (1 − commission) × uptime × decentralization bonus.',
-  keywords: [
-    'Monad delegation', 'Monad validator picker', 'best Monad validator',
-    'Monad APR', 'delegate MON',
-  ],
+    'Find the best Monad validator for your delegation. Net APR, decentralization-weighted picker. ' +
+    'Now part of /validators as the Delegator view mode.',
   alternates: {
-    canonical: 'https://monad-tech.com/delegate',
-  },
-  openGraph: {
-    title: 'Delegate to a Monad validator — Monad Tech',
-    description: 'Find the best validator for your delegation. Net APR, decentralization-weighted.',
-    url: 'https://monad-tech.com/delegate',
-    type: 'website',
+    canonical: 'https://monad-tech.com/validators?view=delegator',
   },
 };
 

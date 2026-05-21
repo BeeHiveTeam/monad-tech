@@ -23,7 +23,10 @@ export default function sitemap(): MetadataRoute.Sitemap {
       priority: 0.9,
     },
     {
-      url: `${BASE_URL}/delegate`,
+      // /delegate redirects to /validators?view=delegator (audit 2026-05-21
+      // merged the picker into the validators table as a view mode).
+      // Canonical URL is the validators one with the query param.
+      url: `${BASE_URL}/validators?view=delegator`,
       lastModified: now,
       changeFrequency: 'hourly',
       priority: 0.9,
