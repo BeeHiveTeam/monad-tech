@@ -21,6 +21,7 @@ import { getMoniker } from './validator-monikers';
 import {
   getReorgState, getSetChanges,
   fetchReorgsFromInflux, fetchSetChangesFromInflux,
+  isSnapshotRotationArtifact,
 } from './networkHealth';
 import { fetchAnomaliesFromInflux } from './anomalyDetectors';
 
@@ -93,7 +94,16 @@ export async function collectReorgs(sinceMs: number): Promise<Incident[]> {
 export async function collectValidatorSetChanges(sinceMs: number): Promise<Incident[]> {
   const windowSec = Math.ceil((Date.now() - sinceMs) / 1000);
   const persisted = await fetchSetChangesFromInflux(windowSec);
-  const events = persisted ?? getSetChanges().events.filter(e => e.ts >= sinceMs);
+  const rawEvents = persisted ?? getSetChanges().events.filter(e => e.ts >= sinceMs);
+  // Audit-pass 2026-05-21 R1+R2: incidents pipeline was leaking the same
+  // epoch-rotation noise that /network's Validator Set Changes filters out.
+  // /incidents at 6h showed 152 events of which ~140 were canonical -11M MON
+  // rotation artifacts (operators cycling in/out of the 200-slot active set).
+  // Apply the same filter here so /incidents is signal, not noise.
+  const events = rawEvents.filter(e => !isSnapshotRotationArtifact({
+    ts: e.ts, type: e.type, address: e.address, moniker: e.moniker,
+    oldStake: e.oldStake, newStake: e.newStake, delta: e.delta,
+  }));
   return events
     .filter(e => e.ts >= sinceMs)
     .map(e => {

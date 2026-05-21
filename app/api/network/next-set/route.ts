@@ -119,12 +119,18 @@ export async function GET(req: NextRequest) {
 
     // Stake movers: REAL delegate/undelegate flow only. Audit 2026-05-20 found
     // that without the (snap>0 AND active>0) gate, this table fills with 30
-    // epoch-rotation crossings (snap=0, active=11M) — already shown in the
-    // Leaving list above + filtered as artifacts in Validator Set Changes.
-    // Now requires both stakes positive (= real delegation movement that
-    // doesn't simultaneously cross an active-set boundary).
+    // epoch-rotation crossings. Audit 2026-05-21 R3 found a second source of
+    // duplication: validators already in JOINING/LEAVING lists also showed up
+    // here (joining at 11M with active 9M ⇒ -2M mover row that says nothing
+    // new). Now also excludes joining ∪ leaving — Movers shows ONLY validators
+    // whose stake is changing but they're NOT crossing an active-set boundary
+    // this rotation.
+    const joiningLeavingIds = new Set<number>();
+    for (const r of joining) joiningLeavingIds.add(r.validatorId);
+    for (const r of leaving) joiningLeavingIds.add(r.validatorId);
     const movers = allRows
       .filter(r => {
+        if (joiningLeavingIds.has(r.validatorId)) return false;
         if (r.snapshotStakeMon <= 0 || r.activeStakeMon <= 0) return false;
         return Math.abs(r.deltaMon) >= STAKE_MOVE_THRESHOLD_MON
             || Math.abs(r.deltaPct) >= STAKE_MOVE_THRESHOLD_PCT;

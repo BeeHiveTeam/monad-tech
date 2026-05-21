@@ -574,8 +574,9 @@ export default function ValidatorsPage() {
                         Comm. <SortIcon active={sortKey === 'commission'} dir={sortDir} />
                         <ResizeHandle colKey="commission" onMouseDown={startResize('commission')} active={resizing === 'commission'} />
                       </th>
-                      <th style={thStyle('score')} onClick={() => handleSort('score')}>
-                        Score <SortIcon active={sortKey === 'score'} dir={sortDir} />
+                      <th style={thStyle('score')} onClick={() => handleSort('score')}
+                          title="Legacy 3-axis health score (health × uptime × recency). For the comprehensive 6-axis Composite Score, open the validator detail page.">
+                        Health <SortIcon active={sortKey === 'score'} dir={sortDir} />
                         <ResizeHandle colKey="score" onMouseDown={startResize('score')} active={resizing === 'score'} />
                       </th>
                       <th style={thStyle('health')} onClick={() => handleSort('health')}>
@@ -675,6 +676,15 @@ export default function ValidatorsPage() {
                               style={{ color: 'var(--text)', fontFamily: 'DM Mono, monospace', fontSize: 12, textDecoration: 'none' }}
                             >
                               {shortAddr(v.address)}
+                            </Link>
+                            {' '}
+                            <Link
+                              href={`/validators/${v.address}/audit`}
+                              onClick={e => e.stopPropagation()}
+                              style={{ color: 'var(--gold-dim)', fontSize: 10, textDecoration: 'none', marginLeft: 6, opacity: 0.7 }}
+                              title="On-chain reward receipts"
+                            >
+                              ↳ audit
                             </Link>
                           </td>
                           {/* Stake */}

@@ -6,7 +6,6 @@ import HexBg from '@/components/HexBg';
 import SiteHeader from '@/components/SiteHeader';
 import TabNav from '@/components/TabNav';
 import { useNetwork } from '@/lib/useNetwork';
-import { NETWORKS } from '@/lib/networks';
 import { formatDistanceToNow } from 'date-fns';
 
 interface AuditRecord {
@@ -70,7 +69,6 @@ export default function ValidatorAuditPage() {
     return () => ctrl.abort();
   }, [address, network, windowBlocks]);
 
-  const explorer = NETWORKS[network]?.explorer ?? 'https://testnet.monadscan.com';
   const liveState = loading ? 'loading' : 'live';
 
   const csvUrl = `/api/validators/${address}/audit?network=${network}&windowBlocks=${windowBlocks}&limit=5000&format=csv`;
@@ -233,10 +231,11 @@ export default function ValidatorAuditPage() {
                       {data.rewards.slice(0, 100).map((r, idx) => (
                         <tr key={`${r.blockNumber}-${idx}`} style={{ borderTop: '1px solid var(--border)' }}>
                           <td style={{ padding: '8px 16px', fontFamily: 'DM Mono, monospace' }}>
-                            <a href={`${explorer}/block/${r.blockNumber}`} target="_blank" rel="noopener noreferrer"
+                            {/* Internal block route — audit-pass R15 (was external monadscan). */}
+                            <Link href={`/block/${r.blockNumber}`}
                               style={{ color: 'var(--gold)', textDecoration: 'none' }}>
                               {r.blockNumber.toLocaleString()}
-                            </a>
+                            </Link>
                           </td>
                           <td style={{ padding: '8px 16px', color: 'var(--text-muted)' }}>
                             {r.timestamp

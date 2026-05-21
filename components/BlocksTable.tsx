@@ -71,8 +71,14 @@ export default function BlocksTable({ blocks }: Props) {
                 {b.txCount}
               </td>
               <td style={nowrap}>{gasBar(b.gasUsed, b.gasLimit)}</td>
-              <td style={{ fontFamily: 'DM Mono, monospace', fontSize: 12, color: 'var(--text-muted)', ...nowrap }}>
-                {short(b.miner)}
+              <td style={{ fontFamily: 'DM Mono, monospace', fontSize: 12, ...nowrap }}>
+                <Link
+                  href={`/validators/${b.miner}`}
+                  style={{ color: 'var(--gold-dim)', textDecoration: 'none' }}
+                  title={b.miner}
+                >
+                  {short(b.miner)}
+                </Link>
               </td>
             </tr>
           ))}

@@ -296,13 +296,22 @@ export default function IncidentTimeline() {
                             </Link>
                           )}
                           {i.address && (
-                            <Link
-                              href={`/address/${i.address}`}
-                              style={{ color: 'var(--gold-dim)', textDecoration: 'none' }}
-                              title={i.address}
-                            >
-                              addr: {i.address.slice(0, 8)}…{i.address.slice(-4)}
-                            </Link>
+                            <>
+                              {/* validator-relevant incident types route to the
+                                  validator detail page; everything else routes
+                                  to the generic address view */}
+                              <Link
+                                href={
+                                  ['validator_added','validator_removed','stake_decrease','vote_delay_high'].includes(i.type)
+                                    ? `/validators/${i.address}`
+                                    : `/address/${i.address}`
+                                }
+                                style={{ color: 'var(--gold-dim)', textDecoration: 'none' }}
+                                title={i.address}
+                              >
+                                addr: {i.address.slice(0, 8)}…{i.address.slice(-4)}
+                              </Link>
+                            </>
                           )}
                           {i.service && <span>service: {i.service}</span>}
                         </div>
