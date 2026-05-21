@@ -1,7 +1,7 @@
 'use client';
 import Link from 'next/link';
-import { usePathname, useSearchParams } from 'next/navigation';
-import { Suspense, useEffect, useRef, useState } from 'react';
+import { usePathname } from 'next/navigation';
+import { useEffect, useRef, useState } from 'react';
 
 interface Tab {
   label: string;
@@ -10,10 +10,15 @@ interface Tab {
   badge?: string;
 }
 
+// "Delegate" tab was removed 2026-05-21: it pointed to /validators?view=delegator
+// which is the SAME page as Validators — only the in-page view toggle differed.
+// Having two tabs for one page made the site look like there were two
+// validator sections. Now: one "Validators" tab; users switch view via the
+// OPERATOR/DELEGATOR toggle inside the page. /delegate URL still redirects
+// for old bookmarks.
 const TABS: Tab[] = [
   { label: 'Network Status', href: '/' },
   { label: 'Validators', href: '/validators' },
-  { label: 'Delegate', href: '/validators?view=delegator', badge: 'NEW' },
   { label: 'My Delegations', href: '/my-delegations', badge: 'NEW' },
   { label: 'Network Health', href: '/network' },
   { label: 'Incidents', href: '/incidents' },
@@ -21,20 +26,8 @@ const TABS: Tab[] = [
   { label: 'BeeHive', href: '/beehive', badge: 'OPERATOR' },
 ];
 
-// useSearchParams requires a Suspense boundary in Next 15 to avoid bailing
-// the page out of static rendering — wrap the inner component.
 export default function TabNav() {
-  return (
-    <Suspense fallback={<div style={{ minHeight: 50 }} />}>
-      <TabNavInner />
-    </Suspense>
-  );
-}
-
-function TabNavInner() {
   const pathname = usePathname();
-  const searchParams = useSearchParams();
-  const view = searchParams?.get('view');
   const navRef = useRef<HTMLDivElement | null>(null);
   const activeRef = useRef<HTMLDivElement | null>(null);
   const [fades, setFades] = useState({ left: false, right: false });
@@ -75,16 +68,13 @@ function TabNavInner() {
       {TABS.map((tab) => {
         // Tab matching logic:
         //  - /tools highlights for hub and sub-routes
-        //  - /validators?view=delegator highlights the "Delegate" tab, plain
-        //    /validators highlights the "Validators" tab — disambiguated by
-        //    inspecting the `?view` query param
+        //  - /validators highlights for both operator and delegator views
+        //    (?view=delegator is in-page toggle, not a separate tab)
         //  - everything else uses exact pathname match
         const isActive = tab.href === '/tools'
           ? (pathname === '/tools' || pathname.startsWith('/tools/'))
-          : tab.href === '/validators?view=delegator'
-            ? (pathname === '/validators' && view === 'delegator')
           : tab.href === '/validators'
-            ? (pathname === '/validators' && view !== 'delegator')
+            ? (pathname === '/validators' || pathname.startsWith('/validators/'))
           : pathname === tab.href;
         const content = (
           <div ref={isActive ? activeRef : undefined} className="tab-link" style={{
