@@ -126,7 +126,7 @@ export default function ToolsScriptsPage() {
               fontSize: 13, color: 'var(--text-muted)',
               maxWidth: 760, lineHeight: 1.65,
             }}>
-              Two single-file bash scripts for Monad node operators. Each cross-references
+              Three single-file bash scripts for Monad node operators. Each cross-references
               {' '}<a href="https://docs.monad.xyz/node-ops" target="_blank" rel="noreferrer"
                  style={{ color: 'var(--gold-dim)' }}>docs.monad.xyz/node-ops</a>{' '}
               for every check, every default, every fix-it command. Production-tested on

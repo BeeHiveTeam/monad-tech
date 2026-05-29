@@ -28,13 +28,14 @@ const TOOLS: ToolCard[] = [
   {
     emoji: '🩺',
     title: 'Operator Scripts',
-    blurb: 'Pre-flight check + host setup — single-file bash',
+    blurb: 'Pre-flight check, host setup + recovery watchdog — single-file bash',
     details:
-      "Two single-file bash scripts that take a fresh Ubuntu 24.04 box to a fully-" +
-      "configured Monad validator: monad-doctor (50+ readiness checks across hardware, " +
-      "OS, network, security, monad-specific config) and monad-validator-setup " +
-      "(13 idempotent install steps, --network=testnet|mainnet, --node-type=validator|full, " +
-      "--with-monitoring). Cross-referenced against docs.monad.xyz.",
+      "Three single-file bash scripts for Monad node operators: monad-doctor (50+ " +
+      "readiness checks across hardware, OS, network, security, monad-specific config), " +
+      "monad-validator-setup (idempotent install steps, --network=testnet|mainnet, " +
+      "--node-type=validator|full, --with-monitoring), and monad-watchdog (cron " +
+      "auto-recovery for the 'local timeout' deadlock — RPC-driven, statesync-aware, " +
+      "validator-safety gated). Cross-referenced against docs.monad.xyz.",
     href: '/tools/scripts',
   },
   {

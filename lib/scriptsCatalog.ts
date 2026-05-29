@@ -87,6 +87,31 @@ const STATIC_SCRIPTS: Omit<ScriptEntry, 'lines' | 'lastCommitSha' | 'lastCommitD
     githubUrl: `https://github.com/${REPO_OWNER}/${REPO_NAME}/tree/${REPO_BRANCH}/validator-setup`,
     installCmd: `git clone https://github.com/${REPO_OWNER}/${REPO_NAME}.git\ncd monad-tools && sudo ./validator-setup/monad-validator-setup`,
   },
+  {
+    name: 'monad-watchdog',
+    path: 'watchdog/monad-watchdog',
+    purpose: 'Stuck-node auto-recovery (cron)',
+    description:
+      "Detects and recovers a stuck full-node from cron. Targets the 'local timeout' " +
+      "deadlock — a node that drops below its upstream-validator target freezes its " +
+      "block-tree root and can never self-recover; a process restart is the only fix. " +
+      "Restart decisions are RPC-derived (block FROZEN or large GAP) and guarded: never " +
+      "restarts on an unreachable RPC, and during statesync it stays hands-off but alerts " +
+      "if the synced height stalls (peer-statesync that can't complete needs a hard reset).",
+    highlights: [
+      "Recovers the 'local timeout' deadlock automatically — every 5 min",
+      'RPC-driven triggers (FROZEN / GAP); never restarts on a blind 0',
+      'Statesync-aware + stalled-statesync alert (the gap a restart can’t fix)',
+      'Validator safety-gate: refuses to restart a node with a non-burn beneficiary',
+      'Cooldown + escalation so it never restart-loops',
+    ],
+    rawUrl: `https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/${REPO_BRANCH}/watchdog/monad-watchdog`,
+    githubUrl: `https://github.com/${REPO_OWNER}/${REPO_NAME}/tree/${REPO_BRANCH}/watchdog`,
+    installCmd:
+      `sudo curl -fsSL https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/${REPO_BRANCH}/watchdog/monad-watchdog -o /usr/local/bin/monad-watchdog\n` +
+      `sudo chmod +x /usr/local/bin/monad-watchdog\n` +
+      `( sudo crontab -l 2>/dev/null | grep -v monad-watchdog; echo '*/5 * * * * /usr/local/bin/monad-watchdog >> /var/log/monad-watchdog.log 2>&1' ) | sudo crontab -`,
+  },
 ];
 
 interface CacheEntry {
