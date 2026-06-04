@@ -113,8 +113,14 @@ export async function GET(req: NextRequest) {
       .sort((a, b) => b.snapshotStakeMon - a.snapshotStakeMon);
 
     // Leaving: in current consensus but NOT in projected next set.
+    // BUT exclude epoch-freeze artifacts. At the boundary the snapshot (slot 8)
+    // is rotated and transiently reads 0 for established validators, which would
+    // otherwise list a fully-active validator (live + consensus stake intact) as
+    // "leaving". A TRUE departure has snapshot 0 AND its live stake also ~0
+    // (delegators pulled out); a freeze artifact has snapshot 0 but live stake>0.
     const leaving = allRows
       .filter(r => currentIds.has(r.validatorId) && !projectedIds.has(r.validatorId))
+      .filter(r => !(r.snapshotStakeMon === 0 && r.activeStakeMon > 0))
       .sort((a, b) => b.snapshotStakeMon - a.snapshotStakeMon);
 
     // Stake movers: REAL delegate/undelegate flow only. Audit 2026-05-20 found

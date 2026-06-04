@@ -5,6 +5,7 @@ import { getValidatorInfo } from '@/lib/validator-monikers';
 import { ensureRegistryLoaded, getRegistryEntries, getConsensusIds, getChainDataById } from '@/lib/validator-registry';
 import { NETWORKS, NetworkId } from '@/lib/networks';
 import { getBlockCache, setBlockCache } from '@/lib/block-cache';
+import { getListValidator } from '@/lib/listResultCache';
 import { getValidatorIdForBlock, getBeneficiaryForValidator } from '@/lib/beneficiaryMap';
 import { getMinerAggregate, getAggregateState } from '@/lib/wsBlockStream';
 import {
@@ -159,10 +160,22 @@ export async function GET(
       cumulativeMinerBlocks: aggForMe?.blocks ?? 0,
     });
 
+    // LIST/DETAIL parity: blocksProduced/participationPct/sharePct/ageSeconds are
+    // 500-block-window stats that diverge when list and detail sample at different
+    // times. Source them from the list's already-computed result (the numbers the
+    // /validators page shows); fall back to this endpoint's own when list cache is
+    // cold. health & participationLong come from the stable aggregator and already
+    // match, so they are not overridden.
+    const listV = getListValidator(network, addr);
+    const blocksProducedFinal = listV?.blocksProduced ?? blocksProduced;
+    const participationPctFinal = listV?.participationPct ?? m.participationPct;
+    const sharePctFinal = listV?.sharePct ?? m.sharePct;
+    const ageSecondsFinal = listV?.ageSeconds ?? m.ageSeconds;
+
     const score = computeValidatorScore({
       health: m.health,
-      participationPct: m.participationPct,
-      ageSeconds: m.ageSeconds,
+      participationPct: participationPctFinal,
+      ageSeconds: ageSecondsFinal,
       personalGapSeconds: m.personalGapSeconds,
       registered: info != null,
     });
@@ -175,16 +188,16 @@ export async function GET(
       stakeMon,
       totalActiveStake,
       commissionPct: info?.commissionPct ?? null,
-      participationPct: m.participationPct,
+      participationPct: participationPctFinal,
       participationLong: m.participationLong,
       isActiveSet,
     });
 
     const compositeScore = computeCompositeScore({
       health: m.health,
-      participationPct: m.participationPct,
+      participationPct: participationPctFinal,
       participationLong: m.participationLong,
-      ageSeconds: m.ageSeconds,
+      ageSeconds: ageSecondsFinal,
       personalGapSeconds: m.personalGapSeconds,
       stakeMon,
       totalActiveStake,
@@ -227,12 +240,12 @@ export async function GET(
       stats: {
         health: m.health,
         score,
-        blocksProduced,
+        blocksProduced: blocksProducedFinal,
         totalTxs,
-        sharePct: m.sharePct,
-        participationPct: m.participationPct,
+        sharePct: sharePctFinal,
+        participationPct: participationPctFinal,
         participationLong: m.participationLong,        // parity with list-API
-        ageSeconds: m.ageSeconds,
+        ageSeconds: ageSecondsFinal,
         lastBlockTs,
         firstBlockTs,
         isNewInWindow: m.isNewInWindow,

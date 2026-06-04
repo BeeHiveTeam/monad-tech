@@ -18,6 +18,17 @@ export async function GET(req: NextRequest) {
   const sevRaw = req.nextUrl.searchParams.get('severity');
   const severity = sevRaw && ALLOWED_SEVERITY.has(sevRaw) ? sevRaw as Severity : undefined;
 
+  // Incident detectors read testnet-only InfluxDB. For mainnet there is no
+  // public source yet — return an explicit coming-soon payload, never echo
+  // testnet data under a mainnet request.
+  const network = req.nextUrl.searchParams.get('network') ?? 'testnet';
+  if (network === 'mainnet') {
+    return NextResponse.json(
+      { range, network: 'mainnet', comingSoon: true, events: [], counts: { info: 0, warn: 0, critical: 0 } },
+      { headers: { 'Cache-Control': 'public, s-maxage=60' } },
+    );
+  }
+
   try {
     const data = await getIncidentFeedCached(RANGE_SECONDS[range], severity);
     return NextResponse.json({ range, ...data }, {

@@ -1,4 +1,4 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { apiError } from '@/lib/apiError';
 import { parsePrometheus, findLatest } from '@/lib/prom-parser';
 
@@ -10,7 +10,16 @@ const LOCAL_RPC_URL = process.env.MONAD_RPC_URL || 'https://testnet-rpc.monad.xy
 // Returns live infra stats for our own BeeHive validator node: client version,
 // block height, peer count, uptime, node identity. This is the data source for
 // the public-facing /beehive page.
-export async function GET() {
+export async function GET(req: NextRequest) {
+  // Our validator + its otelcol/Prometheus are testnet-only. Never serve these
+  // testnet figures under a mainnet request — return coming-soon instead.
+  const network = req.nextUrl.searchParams.get('network') ?? 'testnet';
+  if (network === 'mainnet') {
+    return NextResponse.json(
+      { network: 'mainnet', comingSoon: true, operator: 'BeeHive' },
+      { headers: { 'Cache-Control': 'public, s-maxage=60' } },
+    );
+  }
   try {
     const [promRes, rpcRes] = await Promise.allSettled([
       fetch(PROM_URL, { signal: AbortSignal.timeout(5_000), cache: 'no-store' }),

@@ -345,16 +345,22 @@ export async function GET(
     // formula injection in Excel/Sheets. Defence-in-depth, ~5 lines.
     if (format === 'csv') {
       const header = 'block_number,timestamp_iso,amount_mon,validator_id,tx_hash,type,reason';
-      const rows = records.map(r => {
-        const tsIso = r.timestamp ? new Date(r.timestamp * 1000).toISOString() : '';
+      // Export the FULL fetched set (allLogs), not the display-limited `records`
+      // slice — otherwise the CSV silently undercounts vs summary.totalRewardsMon
+      // (the headline) for active validators with more rewards than `limit`.
+      // Timestamps are only fetched for the first ~100 displayed rows, so older
+      // CSV rows leave timestamp_iso blank — block_number + amount stay complete.
+      const rows = allLogs.map(log => {
+        const ts = tsMap.get(log.blockNumber);
+        const tsIso = ts ? new Date(ts * 1000).toISOString() : '';
         return [
-          r.blockNumber,
+          log.blockNumber,
           tsIso,
-          r.amount,
-          r.validatorId,
-          r.txHash ?? '',
-          r.type,
-          r.reason ?? '',
+          formatMon(log.amount),
+          log.validatorId,
+          log.txHash ?? '',
+          'reward',
+          `Block reward for producing block ${log.blockNumber} (epoch ${log.epoch})`,
         ].map(csvCell).join(',');
       });
       const csvBody = [header, ...rows].join('\n');

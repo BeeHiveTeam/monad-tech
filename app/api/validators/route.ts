@@ -4,6 +4,7 @@ import { NETWORKS, NetworkId } from '@/lib/networks';
 import { getMoniker, getValidatorInfo } from '@/lib/validator-monikers';
 import { ensureRegistryLoaded, getRegistryEntries, getConsensusIds, getChainDataById } from '@/lib/validator-registry';
 import { setBlockCache } from '@/lib/block-cache';
+import { setListResult } from '@/lib/listResultCache';
 import { getMinerAggregate, getAggregateState } from '@/lib/wsBlockStream';
 import { getValidatorIdForBlock, recordBeneficiary, getBeneficiaryForValidator } from '@/lib/beneficiaryMap';
 import { computeValidatorMetrics, computeTotalActiveStake, isInActiveSet, computeAuthStake, computeRealizedApr } from '@/lib/validatorMetrics';
@@ -334,7 +335,7 @@ function refreshInBackground(network: NetworkId) {
   if (refreshing.get(network)) return;
   refreshing.set(network, true);
   computeValidators(network)
-    .then(data => { cache.set(network, { ts: Date.now(), data }); })
+    .then(data => { cache.set(network, { ts: Date.now(), data }); setListResult(network, data); })
     .catch(err => { console.error('[validators] background refresh failed:', err); })
     .finally(() => { refreshing.set(network, false); });
 }
