@@ -461,9 +461,28 @@ async function getInstalledVersion(): Promise<string | null> {
     const res = await fetch(OTELCOL_METRICS, { signal: AbortSignal.timeout(5_000) });
     if (!res.ok) return c?.ver ?? null;
     const text = await res.text();
-    // Labels like:  monad_..._xxx{...service_version="0.14.1",...} value
-    const m = text.match(/service_version="([^"]+)"/);
-    const ver = m ? m[1] : null;
+    // After a binary upgrade, otelcol briefly exports BOTH the old and new
+    // `monad_node_info` series (e.g. service_version 0.14.4 AND 0.14.5). A plain
+    // first-match grabs whichever appears first — usually the STALE one — so the
+    // badge showed the old version after an upgrade. Pick the service_version
+    // from the monad_node_info line with the LATEST timestamp (same rule as
+    // findLatest in /api/beehive). Line: `monad_node_info{...service_version="X"} 1 <tsMs>`
+    let ver: string | null = null;
+    let bestTs = -1;
+    for (const line of text.split('\n')) {
+      if (!line.startsWith('monad_node_info')) continue;
+      const vm = line.match(/service_version="([^"]+)"/);
+      if (!vm) continue;
+      const parts = line.trim().split(/\s+/);
+      const ts = Number(parts[parts.length - 1]);
+      const t = Number.isFinite(ts) ? ts : 0;
+      if (t >= bestTs) { bestTs = t; ver = vm[1]; }
+    }
+    // Fallback for exporters that don't emit monad_node_info: old first-match.
+    if (ver === null) {
+      const m = text.match(/service_version="([^"]+)"/);
+      ver = m ? m[1] : null;
+    }
     gCache.__installedVer__ = { ver, ts: Date.now() };
     return ver;
   } catch {
