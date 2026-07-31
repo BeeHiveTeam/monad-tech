@@ -112,9 +112,14 @@ export async function GET(
     const blocksProduced = myBlocks.length;
 
     // Time window
-    const timestamps = validBlocks.map(b => parseInt(b.timestamp, 16));
-    const newestTs = Math.max(...timestamps);
-    const oldestTs = Math.min(...timestamps);
+    // Math.max() of an empty array is -Infinity (and Math.min is +Infinity), which then
+    // propagates into windowSeconds and out through JSON as null. validBlocks can legitimately
+    // be empty — an RPC hiccup, or the network gating above — and that path became easier to
+    // reach once mainnet stopped borrowing the testnet ring. Guard rather than emit nonsense.
+    const timestamps = validBlocks.map(b => parseInt(b.timestamp, 16)).filter(Number.isFinite);
+    const nowSec = Math.floor(Date.now() / 1000);
+    const newestTs = timestamps.length ? Math.max(...timestamps) : nowSec;
+    const oldestTs = timestamps.length ? Math.min(...timestamps) : nowSec;
     const windowSeconds = Math.max(1, newestTs - oldestTs);
 
     // My stats

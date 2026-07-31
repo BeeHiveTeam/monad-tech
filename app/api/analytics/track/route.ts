@@ -77,11 +77,16 @@ const KNOWN_PATHS = new Set([
 function normalizePath(p: string): string {
   // Strip query/hash first — they are caller-controlled too.
   const clean = p.split('?')[0].split('#')[0];
+  // Collapse the WHOLE path under a dynamic prefix, not just its first segment. Matching
+  // [^/?#]+ left everything after it intact — /block/1/AAAA became /block/:n/AAAA, which then
+  // passed the startsWith() gate below and was written verbatim. 5000 crafted paths produced
+  // 5000 distinct tags, so the unbounded-cardinality vector this function exists to close was
+  // still wide open.
   const collapsed = clean
-    .replace(/^\/block\/[^/?#]+/, '/block/:n')
-    .replace(/^\/tx\/[^/?#]+/, '/tx/:hash')
-    .replace(/^\/validators\/[^/?#]+/, '/validators/:addr')
-    .replace(/^\/address\/[^/?#]+/, '/address/:addr');
+    .replace(/^\/block\/.*/, '/block/:n')
+    .replace(/^\/tx\/.*/, '/tx/:hash')
+    .replace(/^\/validators\/.*/, '/validators/:addr')
+    .replace(/^\/address\/.*/, '/address/:addr');
   if (collapsed.startsWith('/block/:n') || collapsed.startsWith('/tx/:hash')
       || collapsed.startsWith('/validators/:addr') || collapsed.startsWith('/address/:addr')) {
     return collapsed;

@@ -260,8 +260,15 @@ async function fetchConsensusSet(rpcUrl: string): Promise<Set<number>> {
   return ids;
 }
 
-async function enumerateOnChain(rpcUrl: string, maxProbeId = 500): Promise<Map<number, ChainValidatorData>> {
+// Returns the map AND whether any batch actually failed at the transport level. The caller needs
+// that distinction: "the chain has no validators" and "we could not reach the chain" produce the
+// same empty map, and only the second one justifies retrying sooner than the TTL. Mainnet's
+// staking precompile currently answers `method not supported`, so an empty result there is a
+// legitimate answer — retrying it every few minutes would rebuild the hammer loop this file
+// exists to avoid, at twelve times the hourly rate.
+async function enumerateOnChain(rpcUrl: string, maxProbeId = 500): Promise<{ map: Map<number, ChainValidatorData>; anyBatchFailed: boolean }> {
   const result = new Map<number, ChainValidatorData>();
+  let anyBatchFailed = false;
   // BATCH 50→25 to align with [[monad-rpc-pacing]] hard rule (cap at 25).
   // 500/25 = 20 batches × 800ms pause = ~16s. Runs once per hour
   // (REGISTRY_TTL_MS), no UX impact.
@@ -285,7 +292,7 @@ async function enumerateOnChain(rpcUrl: string, maxProbeId = 500): Promise<Map<n
         body: JSON.stringify(requests),
         signal: AbortSignal.timeout(30_000),
       });
-      if (!res.ok) continue;
+      if (!res.ok) { anyBatchFailed = true; continue; }
       const items = await res.json() as Array<{ id: number; result?: string }>;
       for (const it of items) {
         const data = decodeValidatorResult(it.result ?? '');
@@ -293,11 +300,11 @@ async function enumerateOnChain(rpcUrl: string, maxProbeId = 500): Promise<Map<n
         if (data.authAddress === '0x0000000000000000000000000000000000000000') continue;
         result.set(it.id, data);
       }
-    } catch { /* retry next batch */ }
+    } catch { anyBatchFailed = true; /* retry next batch */ }
     // Stay under RPC rate limits
     await new Promise(r => setTimeout(r, 800));
   }
-  return result;
+  return { map: result, anyBatchFailed };
 }
 
 export async function ensureRegistryLoaded(rpcUrl: string, network: NetworkId = 'testnet'): Promise<void> {
@@ -314,7 +321,7 @@ export async function ensureRegistryLoaded(rpcUrl: string, network: NetworkId = 
     //      we approximated active set with `stakeMon >= 10M` which can drift
     //      from canonical by a few validators (cap, ties, snapshot freshness).
     //   3. GitHub monikers — metadata overlay keyed by validator ID.
-    const [chainMap, consensusIds, github] = await Promise.all([
+    const [chainResult, consensusIds, github] = await Promise.all([
       enumerateOnChain(rpcUrl, 800),
       fetchConsensusSet(rpcUrl).catch(err => {
         console.error('[registry] getConsensusValidatorSet failed, falling back to stake threshold:', err);
@@ -324,6 +331,7 @@ export async function ensureRegistryLoaded(rpcUrl: string, network: NetworkId = 
     ]);
     _consensusIdsMap.set(network, consensusIds);
     _consensusFetchedAtMap.set(network, Date.now());
+    const chainMap = chainResult.map;
     _chainByIdMap.set(network, chainMap);
     const githubById = new Map<number, GithubValidatorInfo>();
     for (const g of github) githubById.set(g.id, g);
@@ -353,7 +361,16 @@ export async function ensureRegistryLoaded(rpcUrl: string, network: NetworkId = 
     // locking placeholder `validator-N` monikers for the full 1-hour TTL.
     // Clear _lastFetch so the next caller re-tries the GitHub fetch and gives
     // real monikers a chance to populate.
-    if (github.length === 0 && entries.length > 0) {
+    // Retry sooner when something actually FAILED — not merely when the result is empty.
+    // Two distinct situations were being conflated:
+    //   - RPC batches failed (errors are swallowed per batch, so enumerateOnChain returns an
+    //     empty map WITHOUT throwing, and the outer catch never fires). The old condition
+    //     required entries.length > 0, so this case fell through every branch and an empty
+    //     registry was served for the full hour, even after the RPC recovered.
+    //   - The chain legitimately has no validators — mainnet's staking precompile answers
+    //     `method not supported` today. That is an ANSWER, and re-asking it every five minutes
+    //     would mean 800 eth_call plus three GitHub requests on repeat, forever.
+    if (chainResult.anyBatchFailed || (github.length === 0 && entries.length > 0)) {
       // Retry sooner than the 1-hour TTL, but do NOT clear it outright. Clearing meant the
       // next caller re-ran the whole load — 800 eth_call in 32 batches, ~26 s of continuous
       // RPC, plus 3 more unauthenticated GitHub requests that re-arm the 60/hour limit. Once
@@ -361,7 +378,8 @@ export async function ensureRegistryLoaded(rpcUrl: string, network: NetworkId = 
       // its own: a self-sustaining hammer against rpc.monad.xyz (documented limit 25 rps).
       // Backdating the stamp gives a bounded retry window instead of an unbounded loop.
       _lastFetch.set(network, Date.now() - REGISTRY_TTL_MS + REGISTRY_RETRY_MS);
-      console.warn(`[registry] [${network}] GitHub metadata returned 0 entries; retrying in ${REGISTRY_RETRY_MS / 60_000} min (TTL kept)`);
+      const _why = chainResult.anyBatchFailed ? 'on-chain enumeration had failing batches' : 'GitHub metadata returned 0 entries';
+      console.warn(`[registry] [${network}] ${_why}; retrying in ${REGISTRY_RETRY_MS / 60_000} min (TTL kept)`);
     }
   } catch (e) {
     // Same reasoning as above: a hard failure must not licence an immediate full retry.

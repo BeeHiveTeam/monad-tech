@@ -328,7 +328,7 @@ function ValidatorsPageInner() {
   // `search`, so narrowing via the other controls while on, say, page 10 left the index past the
   // end of the filtered set: slice(180, 200) of 120 rows is empty, and the footer read
   // "showing 181-120 of 120".
-  useEffect(() => { setPage(1); }, [search, view, hideUnregistered, maxCommission, minStake, hideWhales]);
+  useEffect(() => { setPage(1); }, [search, view, hideUnregistered, maxCommission, minStake, hideWhales, network]);
 
   const processed = useMemo(() => {
     if (!data?.validators) return [];

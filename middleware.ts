@@ -83,9 +83,14 @@ export function middleware(req: NextRequest) {
     const internalToken = process.env.INTERNAL_API_TOKEN;
     const host = req.headers.get('host') ?? '';
     const hostIsLoopback = host.startsWith('127.0.0.1') || host.startsWith('localhost') || host.startsWith('[::1]');
-    const isInternal = internalToken
-      ? req.headers.get('x-internal-token') === internalToken
-      : (!cfIp && !xff && hostIsLoopback);
+    // OR, not a replacement. As a ternary, setting INTERNAL_API_TOKEN REPLACED the loopback
+    // exemption with a header check — and nothing in this codebase sends that header, so the
+    // moment an operator followed the README and set the variable, the instrumentation pollers
+    // and the /api/validators fan-out lost their exemption and started collecting 429s. The
+    // token is meant to ADD a way to be recognised as internal, not remove the existing one.
+    const isInternal =
+      (!!internalToken && req.headers.get('x-internal-token') === internalToken)
+      || (!cfIp && !xff && hostIsLoopback);
 
     if (!isInternal && isRateLimited(ip)) {
       return new NextResponse('Too Many Requests', {
