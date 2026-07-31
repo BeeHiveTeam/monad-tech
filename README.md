@@ -212,12 +212,28 @@ server {
     ssl_certificate_key /etc/nginx/ssl/monad-tech.com/key.pem;
 
     # HSTS, CSP, rate-limit zones — see docs
+
+    # These proxy headers are REQUIRED, not decoration. Without them every request reaches
+    # the app with no client address at all, and the in-app limiter cannot tell one caller
+    # from another.
+    proxy_set_header Host              $host;
+    proxy_set_header X-Real-IP         $remote_addr;
+    proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+
     location /api/ { proxy_pass http://127.0.0.1:3001; }
     location /    { proxy_pass http://127.0.0.1:3001; }
 }
 ```
 
-Middleware in `middleware.ts` adds in-app rate limiting (300 req / min / IP). Cloudflare handles the outer layer.
+Middleware in `middleware.ts` adds in-app rate limiting (300 req / min / IP). Cloudflare handles
+the outer layer.
+
+Requests are exempted from the limiter only if they are genuine loopback (Host is a loopback
+address and no forwarding header is present) or carry `X-Internal-API-Token` matching
+`INTERNAL_API_TOKEN`. Set that variable if background callers reach the app through anything
+other than loopback — a request with no client address is now rate-limited like any other,
+not treated as internal.
 
 ---
 
@@ -246,9 +262,14 @@ Middleware in `middleware.ts` adds in-app rate limiting (300 req / min / IP). Cl
   (state_root_mismatch, state_sync_active, consensus_stress, vote_delay_high,
   tip_lag, exec_lag) write to `monad_anomalies` measurement. Survives PM2 restarts so
   the public IncidentTimeline doesn't blank out on deploys.
-- **Per-network state isolation** — `tipCache`, validator registry, and
-  moniker map are all keyed by `NetworkId` so the mainnet preview cannot
-  leak testnet data into a mainnet view (or vice versa).
+- **Per-network state isolation — partial, by design.** `tipCache`, the validator registry
+  and the moniker map are keyed by `NetworkId`. The WebSocket ring buffer
+  (`lib/wsBlockStream.ts`) and the beneficiary map (`lib/beneficiaryMap.ts`) are **not** —
+  each is a single global fed by the testnet websocket and `MONAD_RPC_URL`. Callers must
+  therefore gate on the network themselves; `/api/address`, `/api/validators` and
+  `/api/validators/[address]` do, and report zeros plus `ringAvailable: false` for mainnet
+  rather than serving testnet blocks as mainnet activity. This paragraph previously claimed
+  isolation across the board, which was not true of the ring buffer.
 - **Mainnet preview via public RPC** — testnet talks to our own validator;
   mainnet falls back to `https://rpc.monad.xyz`. Mainnet-only sections that
   rely on data we cannot get from a public endpoint (parallelism, top

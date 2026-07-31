@@ -182,9 +182,21 @@ async function computeValidators(network: NetworkId) {
   // gives a much larger sample (thousands of blocks) than the 500-block
   // window above, so participation calculations are statistically stable
   // (variance ~1σ on hours of data vs ~5σ on 500 blocks).
+  // ...but ONLY for testnet. getMinerAggregate/getAggregateState read a single un-keyed global
+  // fed by the testnet websocket, so for mainnet this handed computeValidatorMetrics a testnet
+  // block count as the denominator: participationLong came out 0.0% for every mainnet validator,
+  // which propagated into computeRealizedApr (APR 0.0%) and the composite score. Passing 0 makes
+  // the helper return participationLong = null, and the APR falls back to the window figure —
+  // i.e. "not measured" instead of "measured as zero".
+  const aggregateAvailable = network === 'testnet';
   const aggregateMap = new Map<string, ReturnType<typeof getMinerAggregate>[number]>();
-  for (const a of getMinerAggregate()) aggregateMap.set(a.miner, a);
-  const aggregateState = getAggregateState();
+  if (aggregateAvailable) for (const a of getMinerAggregate()) aggregateMap.set(a.miner, a);
+  // Full zero-shape, not a partial: the same object is echoed into the response `aggregate`
+  // block below, so a mainnet caller must see zeros (nothing observed) rather than the testnet
+  // stream's block/tx/miner counts.
+  const aggregateState = aggregateAvailable
+    ? getAggregateState()
+    : { uniqueMiners: 0, totalBlocks: 0, totalTxs: 0, firstBlock: null, startedAt: Date.now(), windowMs: 0 };
 
   const validators = Array.from(stats.values())
     .map(v => {

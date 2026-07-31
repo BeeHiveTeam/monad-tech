@@ -138,8 +138,14 @@ export async function GET(
     // Long-window aggregator data — same source as list-API. Detail used to
     // omit participationLong; now provides parity so external integrators
     // can rely on a single shape.
-    const aggregateState = getAggregateState();
-    const aggForMe = getMinerAggregate().find(a => a.miner === addr);
+    // Testnet only — these globals are not keyed by network (see /api/validators for the full
+    // reasoning). Feeding a mainnet validator the testnet block count produced participationLong
+    // 0.0% and, downstream, APR 0.0%.
+    const aggregateAvailable = network === 'testnet';
+    const aggregateState = aggregateAvailable
+      ? getAggregateState()
+      : { uniqueMiners: 0, totalBlocks: 0, totalTxs: 0, firstBlock: null, startedAt: Date.now(), windowMs: 0 };
+    const aggForMe = aggregateAvailable ? getMinerAggregate().find(a => a.miner === addr) : undefined;
 
     // Single source of truth — see lib/validatorMetrics.ts. Both list and
     // detail call this exact helper with identical inputs, so participationPct

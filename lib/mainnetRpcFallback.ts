@@ -74,7 +74,17 @@ export function rotateMainnetRpc(reason?: string): string {
 export function isTransientRpcError(err: unknown, httpStatus?: number): boolean {
   if (httpStatus === 429 || (httpStatus !== undefined && httpStatus >= 500)) return true;
   const msg = (err instanceof Error ? err.message : String(err)).toLowerCase();
-  return /\brate\b|\blimit\b|429|-32007|too many|timeout|aborted|econnreset|enotfound|fetch failed/i.test(msg);
+
+  // Deterministic configuration errors that merely CONTAIN the word "limit" are not transient:
+  // "batch call limit exceeded", "block range limit", "exceeds limit" all describe a request
+  // this endpoint will refuse every single time. A bare /\blimit\b/ matched them, so each such
+  // request rotated through providers and then failed anyway — permanently churning the active
+  // endpoint on an error no rotation can fix.
+  if (/batch call limit|block range|range limit|exceeds? (the )?limit|too large|payload too/i.test(msg)) {
+    return false;
+  }
+
+  return /\brate\b|rate limit|429|-32007|too many|timeout|aborted|econnreset|enotfound|fetch failed/i.test(msg);
 }
 
 /**

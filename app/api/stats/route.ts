@@ -111,7 +111,10 @@ export async function GET(req: NextRequest) {
         : 0;
     }
 
-    const gasPriceGwei = gasPrice.status === 'fulfilled' ? Number(gasPrice.value) / 1e9 : 0;
+    // null, not 0. A failed eth_gasPrice used to become a literal 0.0000 that was written to
+    // InfluxDB (the write below is guarded only on latestBlockNum), so /api/history's
+    // mean(gas_gwei) carried that zero forever. Absence of a reading is not a reading of zero.
+    const gasPriceGwei = gasPrice.status === 'fulfilled' ? Number(gasPrice.value) / 1e9 : null;
     const nowSec = Math.floor(Date.now() / 1000);
     const secondsSinceLastBlock = latestBlockTs ? nowSec - latestBlockTs : 999;
 
@@ -143,7 +146,7 @@ export async function GET(req: NextRequest) {
       const signals: string[] = [];
       if (avgGasUtilization > 85) signals.push(`block utilization ${avgGasUtilization.toFixed(0)}%`);
       if (avgBlockTime > 3) signals.push(`block time ${avgBlockTime.toFixed(1)}s`);
-      if (gasPriceGwei > 200) signals.push(`gas ${gasPriceGwei.toFixed(0)} Gwei`);
+      if (gasPriceGwei !== null && gasPriceGwei > 200) signals.push(`gas ${gasPriceGwei.toFixed(0)} Gwei`);
 
       if (signals.length >= 1) {
         health = 'congested';
@@ -157,7 +160,7 @@ export async function GET(req: NextRequest) {
       const nowMs = Date.now();
       const chainLine =
         `monad_chain,network=${network} ` +
-        `tps=${tps.toFixed(3)},gas_gwei=${gasPriceGwei.toFixed(4)},` +
+        `tps=${tps.toFixed(3)},` + (gasPriceGwei !== null ? `gas_gwei=${gasPriceGwei.toFixed(4)},` : '') +
         `block_util_pct=${avgGasUtilization.toFixed(2)},block_time=${avgBlockTime.toFixed(3)},` +
         `block=${latestBlockNum}i,txs_in_block=${txInLatest}i ${nowMs}`;
       influxWrite(chainLine);

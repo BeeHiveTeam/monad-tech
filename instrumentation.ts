@@ -93,9 +93,16 @@ export async function register() {
   // chosen beneficiary (some are 0x0, some are separate wallets, etc.)
   // First scan covers ~5000 blocks (~33 min); subsequent ticks are incremental.
   const { tickBeneficiaryScanner } = await import('./lib/beneficiaryMap');
+  // `void promise` discards the promise WITHOUT attaching a rejection handler. fetchLogs does a
+  // bare fetch with a 20s AbortSignal and no try/catch, so ordinary network flakiness — every
+  // 5 minutes, forever — produced an unhandled rejection. Next installs a process-level handler
+  // so this logged rather than exited, but it is noise that hides real faults either way.
+  const runScannerTick = () =>
+    tickBeneficiaryScanner().catch(e =>
+      console.warn('[beneficiaryMap] tick failed:', e instanceof Error ? e.message : e));
   setTimeout(() => {
-    void tickBeneficiaryScanner();
-    setInterval(() => void tickBeneficiaryScanner(), 5 * 60_000);
+    runScannerTick();
+    setInterval(runScannerTick, 5 * 60_000);
   }, 20_000);
 
   // Public RPC catalog ping monitor — pings ~20 external Monad RPCs once per
@@ -103,8 +110,10 @@ export async function register() {
   // Total egress: ~0.33 req/sec, no impact on monad-rpc itself.
   const { tickRpcMonitor, RPC_PING_INTERVAL_MS } = await import('./lib/rpcMonitor');
   setTimeout(() => {
-    void tickRpcMonitor();
-    setInterval(() => void tickRpcMonitor(), RPC_PING_INTERVAL_MS);
+    const runRpcMonitorTick = () =>
+      tickRpcMonitor().catch(e => console.warn('[rpcMonitor] tick failed:', e instanceof Error ? e.message : e));
+    runRpcMonitorTick();
+    setInterval(runRpcMonitorTick, RPC_PING_INTERVAL_MS);
   }, 30_000);
 
   // Chain-stats poller: hits /api/stats every 15s so InfluxDB `monad_chain`
@@ -130,8 +139,10 @@ export async function register() {
   // write is to localhost InfluxDB.
   const { tickTopContractsWriter } = await import('./lib/topContracts');
   setTimeout(() => {
-    void tickTopContractsWriter('testnet');
-    setInterval(() => void tickTopContractsWriter('testnet'), 60_000);
+    const runTopContractsTick = () =>
+      tickTopContractsWriter('testnet').catch(e => console.warn('[topContracts] tick failed:', e instanceof Error ? e.message : e));
+    runTopContractsTick();
+    setInterval(runTopContractsTick, 60_000);
   }, 45_000);
 
   // eslint-disable-next-line no-console

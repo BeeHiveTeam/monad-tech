@@ -63,19 +63,29 @@ export function middleware(req: NextRequest) {
   // Rate limit all /api/* routes.
   if (pathname.startsWith('/api/')) {
     const cfIp = req.headers.get('cf-connecting-ip');
-    const xfIp = req.headers.get('x-forwarded-for')?.split(',')[0].trim();
+    const xff = req.headers.get('x-forwarded-for');
+    const xfIp = xff?.split(',')[0].trim();
     const ip = cfIp ?? xfIp ?? 'unknown';
 
-    // Exempt internal loopback callers (background pollers, server-to-server
-    // calls between API routes). Without this, /api/network-health calling
-    // /api/validators from 127.0.0.1, plus all the background writers, share
-    // ONE counter and easily blow past 300 req/min — leading to 429 on
-    // legitimate internal traffic. Cloudflare populates cf-connecting-ip for
-    // real external requests, so this only opens up loopback.
-    const isInternal = !cfIp && (
-      ip === '127.0.0.1' || ip === '::1' || ip === 'unknown' ||
-      req.headers.get('host')?.startsWith('127.0.0.1')
-    );
+    // Exempt internal loopback callers (background pollers, server-to-server calls between API
+    // routes). Without this, /api/network-health calling /api/validators from 127.0.0.1, plus
+    // all the background writers, share ONE counter and blow past 300 req/min.
+    //
+    // The previous test derived "internal" from CLIENT-SUPPLIED headers: ip === '127.0.0.1'
+    // (from X-Forwarded-For, which anyone can send) and ip === 'unknown' (no forwarding header
+    // at all). Since the documented nginx config sets no proxy headers, a request straight to
+    // the origin arrived with neither — so it was classified internal and skipped the limiter
+    // entirely. No spoofing even required. Combined with the fan-out on /api/my-delegations,
+    // that is a large unauthenticated amplifier.
+    //
+    // Now: an explicit shared secret if configured, otherwise genuine loopback only — Host is
+    // a loopback address AND no forwarding header is present. 'unknown' is no longer exempt.
+    const internalToken = process.env.INTERNAL_API_TOKEN;
+    const host = req.headers.get('host') ?? '';
+    const hostIsLoopback = host.startsWith('127.0.0.1') || host.startsWith('localhost') || host.startsWith('[::1]');
+    const isInternal = internalToken
+      ? req.headers.get('x-internal-token') === internalToken
+      : (!cfIp && !xff && hostIsLoopback);
 
     if (!isInternal && isRateLimited(ip)) {
       return new NextResponse('Too Many Requests', {

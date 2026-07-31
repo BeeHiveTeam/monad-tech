@@ -650,7 +650,10 @@ const STAKE_DROP_THRESHOLD = 1000;   // MON — ignore jitter below this
 
 export async function tickValidatorSetTracker(): Promise<void> {
   try {
-    const base = process.env.SELF_URL ?? 'http://127.0.0.1:3001';
+    // Follow PORT, the same variable instrumentation.ts binds to. Hardcoding 3001 meant that
+    // under PORT=3000 without SELF_URL every tick hit a closed port, fell into the catch below
+    // and validator-set change tracking silently never worked at all.
+    const base = process.env.SELF_URL ?? `http://127.0.0.1:${Number(process.env.PORT ?? 3001)}`;
     const res = await fetch(`${base}/api/validators`, {
       signal: AbortSignal.timeout(10_000),
       cache: 'no-store',
@@ -728,7 +731,12 @@ export async function tickValidatorSetTracker(): Promise<void> {
       }
     }
     S.prevValidatorSet = curr;
-  } catch { /* swallow */ }
+  } catch (e) {
+    // Was `catch { }`. Swallowing everything is how a wrong port turned into "tracking works,
+    // there just haven't been any changes" for the entire life of the process. Log it: a tick
+    // failing every 60s should be visible, and this runs server-side only.
+    console.warn('[networkHealth] validator-set tick failed:', e instanceof Error ? e.message : e);
+  }
 }
 
 function push(e: SetChangeEvent) {

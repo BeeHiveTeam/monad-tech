@@ -63,12 +63,41 @@ function parseOs(ua: string): string {
   return 'Other';
 }
 
+// Both `path` and `referrer` end up as InfluxDB TAGS, and this endpoint is unauthenticated.
+// Tag values define series cardinality, so anything caller-controlled that reaches them is an
+// unbounded-series vector: 200-char arbitrary paths at will. Collapsing dynamic segments was not
+// enough — any path that matched none of the patterns passed through verbatim.
+// Known routes are kept as-is; everything else collapses to '/other'.
+// Taken from the actual route directories under app/, not from memory.
+const KNOWN_PATHS = new Set([
+  '/', '/address', '/admin', '/beehive', '/block', '/delegate', '/incidents',
+  '/my-delegations', '/network', '/node', '/tools', '/tx', '/validators',
+]);
+
 function normalizePath(p: string): string {
-  // Collapse dynamic segments so /block/27164313 aggregates as /block/:n
-  return p
+  // Strip query/hash first — they are caller-controlled too.
+  const clean = p.split('?')[0].split('#')[0];
+  const collapsed = clean
     .replace(/^\/block\/[^/?#]+/, '/block/:n')
     .replace(/^\/tx\/[^/?#]+/, '/tx/:hash')
-    .replace(/^\/validators\/[^/?#]+/, '/validators/:addr');
+    .replace(/^\/validators\/[^/?#]+/, '/validators/:addr')
+    .replace(/^\/address\/[^/?#]+/, '/address/:addr');
+  if (collapsed.startsWith('/block/:n') || collapsed.startsWith('/tx/:hash')
+      || collapsed.startsWith('/validators/:addr') || collapsed.startsWith('/address/:addr')) {
+    return collapsed;
+  }
+  return KNOWN_PATHS.has(collapsed) ? collapsed : '/other';
+}
+
+// Referrer hostnames are equally caller-controlled. Bound the distinct set: once the cap is hit
+// everything new becomes 'other', so a flood cannot keep minting series.
+const REFERRER_CAP = 300;
+const _seenReferrers = new Set<string>();
+function boundReferrer(host: string): string {
+  if (_seenReferrers.has(host)) return host;
+  if (_seenReferrers.size >= REFERRER_CAP) return 'other';
+  _seenReferrers.add(host);
+  return host;
 }
 
 function normalizeReferrer(r: string | null): string {
@@ -79,7 +108,8 @@ function normalizeReferrer(r: string | null): string {
     // new root domain (monad-tech.com) should count as internal, not external.
     if (u.hostname.endsWith('bee-hive.work')) return 'internal';
     if (u.hostname === 'monad-tech.com' || u.hostname.endsWith('.monad-tech.com')) return 'internal';
-    return u.hostname;
+    if (!/^[a-z0-9.-]{1,64}$/i.test(u.hostname)) return 'other';
+    return boundReferrer(u.hostname.toLowerCase());
   } catch {
     return 'unknown';
   }

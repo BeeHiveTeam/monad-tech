@@ -26,15 +26,26 @@ export interface ChainValidatorData {
 }
 
 const STAKING_PRECOMPILE = '0x0000000000000000000000000000000000001000';
-const GITHUB_API = 'https://api.github.com/repos/monad-developers/validator-info/contents/testnet';
+// Per-network directory. This was hardcoded to /testnet and used for BOTH networks, so a
+// mainnet validator inherited the moniker, website, logo and X account of whichever TESTNET
+// validator happened to share its numeric id — a different operator entirely. Both directories
+// exist upstream (testnet 278 files, mainnet 221 as of 2026-07-31).
+const GITHUB_API_BASE = 'https://api.github.com/repos/monad-developers/validator-info/contents';
+function githubApiUrl(network: NetworkId): string {
+  return `${GITHUB_API_BASE}/${network}`;
+}
 
 // Per-network last-fetch timestamps. Testnet and mainnet have separate
 // state so a mainnet load doesn't reset the testnet TTL clock.
 import type { NetworkId } from './networks';
 const _lastFetch: Map<NetworkId, number> = new Map();
 const REGISTRY_TTL_MS = 60 * 60_000; // 1 hour
+// Backoff after a failed/empty load. Long enough that a GitHub rate-limit window (60 req/hour)
+// can drain, short enough that a transient blip does not leave `validator-N` placeholders up
+// for a full hour.
+const REGISTRY_RETRY_MS = 5 * 60_000; // 5 minutes
 
-async function fetchGithubValidators(): Promise<GithubValidatorInfo[]> {
+async function fetchGithubValidators(network: NetworkId): Promise<GithubValidatorInfo[]> {
   // Hard timeouts so a GitHub stall doesn't pin ensureRegistryLoaded callers
   // (which propagates to /api/validators, /api/address/[address], etc.) forever.
   // List API has a 3-attempt retry with exponential backoff because rate-limit
@@ -43,7 +54,7 @@ async function fetchGithubValidators(): Promise<GithubValidatorInfo[]> {
   let files: { name: string; download_url: string }[] | null = null;
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
-      const res = await fetch(GITHUB_API, {
+      const res = await fetch(githubApiUrl(network), {
         headers: { 'User-Agent': 'monad-stats-dashboard' },
         next: { revalidate: 3600 },
         signal: AbortSignal.timeout(10_000),
@@ -309,7 +320,7 @@ export async function ensureRegistryLoaded(rpcUrl: string, network: NetworkId = 
         console.error('[registry] getConsensusValidatorSet failed, falling back to stake threshold:', err);
         return new Set<number>();
       }),
-      fetchGithubValidators().catch(() => [] as GithubValidatorInfo[]),
+      fetchGithubValidators(network).catch(() => [] as GithubValidatorInfo[]),
     ]);
     _consensusIdsMap.set(network, consensusIds);
     _consensusFetchedAtMap.set(network, Date.now());
@@ -343,12 +354,19 @@ export async function ensureRegistryLoaded(rpcUrl: string, network: NetworkId = 
     // Clear _lastFetch so the next caller re-tries the GitHub fetch and gives
     // real monikers a chance to populate.
     if (github.length === 0 && entries.length > 0) {
-      _lastFetch.delete(network);
-      console.warn(`[registry] [${network}] GitHub metadata returned 0 entries; clearing TTL for retry on next call`);
+      // Retry sooner than the 1-hour TTL, but do NOT clear it outright. Clearing meant the
+      // next caller re-ran the whole load — 800 eth_call in 32 batches, ~26 s of continuous
+      // RPC, plus 3 more unauthenticated GitHub requests that re-arm the 60/hour limit. Once
+      // GitHub starts answering 403 every request re-triggers that, and it never recovers on
+      // its own: a self-sustaining hammer against rpc.monad.xyz (documented limit 25 rps).
+      // Backdating the stamp gives a bounded retry window instead of an unbounded loop.
+      _lastFetch.set(network, Date.now() - REGISTRY_TTL_MS + REGISTRY_RETRY_MS);
+      console.warn(`[registry] [${network}] GitHub metadata returned 0 entries; retrying in ${REGISTRY_RETRY_MS / 60_000} min (TTL kept)`);
     }
   } catch (e) {
-    _lastFetch.delete(network);
-    console.error(`[registry] [${network}] Failed to load:`, e);
+    // Same reasoning as above: a hard failure must not licence an immediate full retry.
+    _lastFetch.set(network, Date.now() - REGISTRY_TTL_MS + REGISTRY_RETRY_MS);
+    console.error(`[registry] [${network}] Failed to load (retry in ${REGISTRY_RETRY_MS / 60_000} min):`, e);
   }
 }
 

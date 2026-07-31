@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { rpcBatch } from '@/lib/rpc';
-import { ensureRegistryLoaded, getChainDataById } from '@/lib/validator-registry';
+import { ensureRegistryLoaded, getChainDataById, getConsensusIds } from '@/lib/validator-registry';
 import { getValidatorInfo } from '@/lib/validator-monikers';
+import { isInActiveSet } from '@/lib/validatorMetrics';
 import { NETWORKS, NetworkId } from '@/lib/networks';
 import { apiError } from '@/lib/apiError';
 
@@ -93,6 +94,11 @@ export async function GET(req: NextRequest) {
       isActiveSet: boolean;
     };
     const positions: Position[] = [];
+    // Canonical membership, not "has any stake at all". `(chain.stakeMon ?? 0) > 0` marked every
+    // validator with a single wei of stake as being in the active set, which is a set of fixed
+    // size gated on a 10M MON threshold — so a delegator saw "active" next to a validator that
+    // produces nothing and earns them nothing.
+    const consensusIds = getConsensusIds(network);
     for (const [vid, stake] of stakeByVid) {
       const chain = chainData.get(vid);
       if (!chain) continue;
@@ -103,7 +109,7 @@ export async function GET(req: NextRequest) {
         moniker: info?.moniker ?? null,
         stakeMon: stake,
         commissionPct: chain.commissionPct ?? null,
-        isActiveSet: (chain.stakeMon ?? 0) > 0,
+        isActiveSet: isInActiveSet(vid, chain.stakeMon ?? null, consensusIds),
       });
     }
     positions.sort((a, b) => b.stakeMon - a.stakeMon);

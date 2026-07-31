@@ -36,7 +36,14 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ address: st
     return NextResponse.json({ error: 'invalid address (must be 0x-prefixed 40-hex)' }, { status: 400 });
   }
 
-  const network = (req.nextUrl.searchParams.get('network') ?? 'testnet') as NetworkId;
+  // Validate rather than cast. `as NetworkId` is a compile-time assertion with no runtime
+  // effect, so ?network=foo reached getRpcUrl -> NETWORKS['foo'].rpc -> TypeError on undefined,
+  // OUTSIDE the try below, i.e. an unhandled 500. Every other route validates; this one didn't.
+  const rawNetwork = req.nextUrl.searchParams.get('network') ?? 'testnet';
+  if (rawNetwork !== 'testnet' && rawNetwork !== 'mainnet') {
+    return NextResponse.json({ error: "invalid network (expected 'testnet' or 'mainnet')" }, { status: 400 });
+  }
+  const network: NetworkId = rawNetwork;
   const rpcUrl = getRpcUrl(network);
 
   try {
@@ -61,12 +68,18 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ address: st
 
     // Validator registry lookup — does this address appear in the staking
     // precompile / GitHub registry?
-    const validatorInfo = getValidatorInfo(addr);
+    const validatorInfo = getValidatorInfo(addr, network);
 
     // Recent ring activity — show blocks where this address was the miner,
     // and txs where it was sender or receiver. Lightweight: scans the RAM
     // ring (typically 9000 blocks ≈ 1h on Monad testnet).
-    const ring = getLatestBlocks(200);
+    // The RAM ring is fed exclusively by the TESTNET websocket (lib/config.ts) and is a single
+    // un-keyed global — it is NOT per-network, despite what the README claims. Scanning it for a
+    // mainnet address rendered testnet blocks and transactions as this account's mainnet
+    // activity, and every resulting tx link led to "Transaction not found". Show nothing rather
+    // than something wrong; `ringAvailable` lets the UI say why.
+    const ringAvailable = network === 'testnet';
+    const ring = ringAvailable ? getLatestBlocks(200) : [];
     const minedBlocks: { number: number; timestamp: number; txCount: number }[] = [];
     const recentTxs: { hash: string; blockNumber: number; from: string; to: string | null; valueMon: string; direction: 'in' | 'out' | 'self' }[] = [];
 
@@ -103,6 +116,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ address: st
     return NextResponse.json({
       address: addr,
       network,
+      ringAvailable,
       balanceMon,
       isContract,
       codeSize,

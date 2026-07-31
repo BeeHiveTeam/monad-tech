@@ -60,7 +60,11 @@ interface RpcLog {
   topics: string[];
 }
 
-async function fetchLogChunk(fromBlock: number, toBlock: number): Promise<RpcLog[]> {
+// Returns null on FAILURE and [] on "no logs in this range" — the caller must be able to tell
+// them apart. Collapsing both to [] meant a failed chunk looked like an empty one, the watermark
+// advanced past it, and those blocks were never scanned again: permanent holes in the
+// beneficiary map, silently.
+async function fetchLogChunk(fromBlock: number, toBlock: number): Promise<RpcLog[] | null> {
   const body = JSON.stringify({
     jsonrpc: '2.0', id: 1, method: 'eth_getLogs',
     params: [{
@@ -76,9 +80,9 @@ async function fetchLogChunk(fromBlock: number, toBlock: number): Promise<RpcLog
     body,
     signal: AbortSignal.timeout(20_000),
   });
-  if (!res.ok) return [];
+  if (!res.ok) return null;
   const j = await res.json() as { result?: RpcLog[]; error?: { message: string } };
-  if (j.error) return [];
+  if (j.error) return null;
   return j.result ?? [];
 }
 
@@ -116,9 +120,17 @@ export async function tickBeneficiaryScanner(): Promise<void> {
   if (fromBlock > toBlock) return;
 
   // Chunk the request — most RPCs limit eth_getLogs to ~1000 blocks per call.
+  // Advance the watermark only across the CONTIGUOUS prefix that actually succeeded. Anything
+  // from the first failed chunk onwards is left unscanned so the next tick retries it.
+  let scannedThrough = fromBlock - 1;
+  let failedAt: number | null = null;
   for (let from = fromBlock; from <= toBlock; from += CHUNK_SIZE) {
     const to = Math.min(from + CHUNK_SIZE - 1, toBlock);
     const logs = await fetchLogChunk(from, to);
+    if (logs === null) {
+      failedAt = from;
+      break;
+    }
     for (const log of logs) {
       const blockNum = parseInt(log.blockNumber, 16);
       const validatorId = parseInt(log.topics[1], 16);
@@ -126,9 +138,13 @@ export async function tickBeneficiaryScanner(): Promise<void> {
         S.blockToValidator.set(blockNum, validatorId);
       }
     }
+    scannedThrough = to;
+  }
+  if (failedAt !== null) {
+    console.warn(`[beneficiaryMap] chunk starting at ${failedAt} failed; watermark held at ${scannedThrough}, will retry`);
   }
 
-  S.highestBlockSeen = Math.max(S.highestBlockSeen, toBlock);
+  S.highestBlockSeen = Math.max(S.highestBlockSeen, scannedThrough);
 
   // Drop entries older than our retention window.
   const dropBefore = tip - SCAN_RANGE_BLOCKS;

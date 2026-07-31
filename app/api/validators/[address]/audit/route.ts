@@ -29,6 +29,29 @@ const ADDRESS_RE = /^0x[a-f0-9]{40}$/;
 // 60s TTL — slow-moving on-chain data, no benefit from shorter. Per-key isolation
 // avoids the trap of caching `?format=csv` with `?format=json`'s entry.
 const _auditCache = new Map<string, { ts: number; data: unknown; csvBody?: string }>();
+// Bounded, with eviction. The key embeds caller-controlled windowBlocks (up to 100 000) and
+// limit (up to 5000), so ?windowBlocks=99999, 99998, ... each missed the cache, allocated a new
+// entry that was never evicted, and launched ~100 eth_getLogs calls. Both an unbounded memory
+// growth path and an amplifier, reachable without authentication.
+const AUDIT_CACHE_MAX = 200;
+function auditCacheSet(key: string, value: { ts: number; data: unknown; csvBody?: string }): void {
+  // Drop anything already expired, then evict oldest-first until under the cap. Map preserves
+  // insertion order, so the first keys are the oldest.
+  const now = Date.now();
+  for (const [k, v] of _auditCache) {
+    if (now - v.ts >= AUDIT_CACHE_TTL_MS) _auditCache.delete(k);
+  }
+  _auditCache.set(key, value);
+  while (_auditCache.size > AUDIT_CACHE_MAX) {
+    const oldest = _auditCache.keys().next();
+    if (oldest.done) break;
+    _auditCache.delete(oldest.value);
+  }
+}
+
+// Quantise caller-supplied window sizes so adjacent values share a cache entry instead of each
+// one forcing a fresh full scan.
+const WINDOW_BUCKET = 5_000;
 const AUDIT_CACHE_TTL_MS = 60_000;
 
 interface RewardLog {
@@ -189,7 +212,7 @@ export async function GET(
   // which previously triggered a full-history scan. NaN guard same fix.
   const wbRaw = parseInt(sp.get('windowBlocks') ?? '', 10);
   const windowBlocks = Number.isFinite(wbRaw) && wbRaw > 0
-    ? Math.min(wbRaw, MAX_WINDOW_BLOCKS)
+    ? Math.min(Math.ceil(wbRaw / WINDOW_BUCKET) * WINDOW_BUCKET, MAX_WINDOW_BLOCKS)
     : SCAN_RANGE_BLOCKS;
 
   const lmRaw = parseInt(sp.get('limit') ?? '', 10);
@@ -364,7 +387,7 @@ export async function GET(
         ].map(csvCell).join(',');
       });
       const csvBody = [header, ...rows].join('\n');
-      _auditCache.set(cacheKey, { ts: Date.now(), data, csvBody });
+      auditCacheSet(cacheKey, { ts: Date.now(), data, csvBody });
       return new NextResponse(csvBody, {
         status: 200,
         headers: {
@@ -374,7 +397,7 @@ export async function GET(
       });
     }
 
-    _auditCache.set(cacheKey, { ts: Date.now(), data });
+    auditCacheSet(cacheKey, { ts: Date.now(), data });
     return NextResponse.json(data);
   } catch (err) {
     return apiError(err, 500, `audit/${addr}`);
