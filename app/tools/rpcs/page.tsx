@@ -29,6 +29,17 @@ interface RpcStatus {
   lastError: string | null;
   lastCheckedAt: number;
   history: number[];
+  clientVersion: string | null;
+  monadVersion: string | null;
+  versionCheckedAt: number | null;
+}
+
+interface VersionHistogram {
+  network: string;
+  counts: { version: string; count: number; providers: string[] }[];
+  proxies: { provider: string; clientVersion: string }[];
+  unknown: string[];
+  monadEndpoints: number;
 }
 interface ApiResp {
   catalog: {
@@ -36,6 +47,7 @@ interface ApiResp {
     rpcs: RpcEntry[];
   };
   status: RpcStatus[];
+  versions: VersionHistogram[];
   lastFullScanAt: number;
   scanCount: number;
 }
@@ -111,9 +123,93 @@ function latencyColor(ms: number | null): string {
   return '#E05252';
 }
 
+
+/**
+ * Version spread across the public endpoints of one network.
+ *
+ * Deliberately labelled "endpoints", not "nodes": a Monad node does not publish its version in
+ * peer discovery or in a name record, so nothing here can see what validators run. What this
+ * does see is what the reachable public surface answers — which is the useful question in the
+ * days around a hardfork.
+ *
+ * Gateways (dRPC answers "Geth/...", Tenderly, thirdweb) are shown apart rather than counted as
+ * an old Monad version, and endpoints that did not answer are named rather than dropped: an
+ * unknown is not a zero.
+ */
+function VersionSpread({ hist, target }: { hist: VersionHistogram | null; target: string | null }) {
+  if (!hist || hist.monadEndpoints === 0) return null;
+  const max = Math.max(...hist.counts.map(c => c.count), 1);
+  const behind = target
+    ? hist.counts.filter(c => c.version !== target).reduce((n, c) => n + c.count, 0)
+    : 0;
+
+  return (
+    <div className="card" style={{ padding: '20px 24px', marginBottom: 16 }}>
+      <h2 style={{
+        fontFamily: 'Bebas Neue, sans-serif', fontSize: 20, letterSpacing: '0.08em',
+        color: 'var(--gold)', margin: 0, marginBottom: 6,
+      }}>
+        CLIENT VERSIONS ACROSS PUBLIC ENDPOINTS
+      </h2>
+      <div style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.6, marginBottom: 14 }}>
+        What each public RPC answers to <code>web3_clientVersion</code>, asked hourly.
+        This is the reachable public surface, <strong>not</strong> the validator set — a node&apos;s
+        version is not published on the wire, so nobody can chart that from outside.
+        {target && behind > 0 && (
+          <> <strong style={{ color: 'var(--gold)' }}>{behind} of {hist.monadEndpoints}</strong> are
+          not yet on {target}.</>
+        )}
+      </div>
+
+      {hist.counts.map(c => {
+        const isTarget = target !== null && c.version === target;
+        return (
+          <div key={c.version} style={{ marginBottom: 10 }}>
+            <div style={{
+              display: 'flex', justifyContent: 'space-between', alignItems: 'baseline',
+              fontFamily: 'DM Mono, monospace', fontSize: 12, marginBottom: 4,
+            }}>
+              <span style={{ color: isTarget ? 'var(--gold)' : 'var(--text)' }}>
+                {c.version}{isTarget ? ' · target' : ''}
+              </span>
+              <span style={{ color: 'var(--text-muted)' }}>{c.count}</span>
+            </div>
+            <div style={{ height: 8, background: 'rgba(255,255,255,0.06)', borderRadius: 4, overflow: 'hidden' }}>
+              <div style={{
+                width: `${(c.count / max) * 100}%`, height: '100%',
+                background: isTarget ? 'var(--gold)' : 'var(--gold-dim)',
+              }} />
+            </div>
+            <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 3, fontFamily: 'DM Mono, monospace' }}>
+              {c.providers.join(', ')}
+            </div>
+          </div>
+        );
+      })}
+
+      {(hist.proxies.length > 0 || hist.unknown.length > 0) && (
+        <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 12, lineHeight: 1.7, fontFamily: 'DM Mono, monospace' }}>
+          {hist.proxies.length > 0 && (
+            <div>
+              not Monad nodes, excluded from the counts:{' '}
+              {hist.proxies.map(x => `${x.provider} (${x.clientVersion})`).join(', ')}
+            </div>
+          )}
+          {hist.unknown.length > 0 && (
+            <div>no answer, version unknown: {hist.unknown.join(', ')}</div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function ToolsRpcsPage() {
   const [data, setData] = useState<ApiResp | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  // MF's target for this network, so "behind" is measured against the published target rather
+  // than against whatever happens to be newest among the endpoints we polled.
+  const [target, setTarget] = useState<string | null>(null);
   const [network, setNetwork] = useNetwork();
 
   useEffect(() => {
@@ -130,6 +226,19 @@ export default function ToolsRpcsPage() {
     const t = setInterval(load, 30_000);
     return () => { cancelled = true; clearInterval(t); };
   }, []);
+
+  // networks.json is MF's machine-readable per-network target. Read it here rather than
+  // hardcoding a version, so this stays correct on both networks and after the next release.
+  useEffect(() => {
+    let alive = true;
+    fetch('https://docs.monad.xyz/networks.json', { cache: 'no-store' })
+      .then(r => r.ok ? r.json() : null)
+      .then((j: Record<string, { monad_version?: string }> | null) => {
+        if (alive && j) setTarget(j[network]?.monad_version ?? null);
+      })
+      .catch(() => { /* target is a nicety; the histogram stands without it */ });
+    return () => { alive = false; };
+  }, [network]);
 
   const statusByHttp = new Map((data?.status ?? []).map(s => [s.http, s]));
   const networks = data?.catalog.networks ?? {};
@@ -167,6 +276,11 @@ export default function ToolsRpcsPage() {
       {err && (
         <div className="card" style={{ padding: 20, color: '#E05252' }}>{err}</div>
       )}
+
+      <VersionSpread
+        hist={data?.versions?.find(v => v.network === network) ?? null}
+        target={target}
+      />
 
       {Object.entries(networks)
         .filter(([key]) => key === network)
