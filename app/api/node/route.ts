@@ -1,10 +1,11 @@
 import { NextResponse } from 'next/server';
 import { getBlockNumber } from '@/lib/rpc';
 import { parsePrometheus, findOne, findAll, sumBy } from '@/lib/prom-parser';
+import { NODE_METRICS_URL } from '@/lib/config';
 
 export const dynamic = 'force-dynamic';
 
-const METRICS_URL = process.env.NODE_METRICS_URL || 'http://15.235.117.52:8889/metrics';
+const METRICS_URL = NODE_METRICS_URL;
 const INFLUX_URL = process.env.INFLUX_URL || 'https://localhost:8086';
 const INFLUX_DB = process.env.INFLUX_DB || 'monad';
 const CACHE_TTL_MS = 10_000;

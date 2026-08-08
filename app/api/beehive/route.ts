@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { apiError } from '@/lib/apiError';
 import { parsePrometheus, findLatest } from '@/lib/prom-parser';
+import { NODE_METRICS_URL } from '@/lib/config';
 
 export const dynamic = 'force-dynamic';
 
-const PROM_URL = process.env.PROM_URL || 'http://15.235.117.52:8889/metrics';
+const PROM_URL = process.env.PROM_URL || NODE_METRICS_URL;
 const LOCAL_RPC_URL = process.env.MONAD_RPC_URL || 'https://testnet-rpc.monad.xyz';
 
 // Returns live infra stats for our own BeeHive validator node: client version,

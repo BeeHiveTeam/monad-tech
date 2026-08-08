@@ -31,8 +31,17 @@ export interface ExecStat {
   gps: number;         // sustained gas/sec
 }
 
-const EXEC_RE =
-  /__exec_block,bl=(\d+),id=(0x[0-9a-fA-F]+),ts=(\d+),tx=\s*(\d+),rt=\s*(\d+),rtp=\s*([\d.]+)%,sr=\s*(\d+)µs,txe=\s*(\d+)µs,cmt=\s*(\d+)µs,tot=\s*(\d+)µs,tpse=\s*(\d+),tps=\s*(\d+),gas=\s*(\d+),gpse=\s*(\d+),gps=\s*(\d+)/;
+// Microseconds are matched as (?:µs|us): the node wrote the micro sign U+00B5 up to 0.15.x and
+// plain ASCII "us" from 0.16.0. A one-character mismatch made parseExecLine return null for
+// every line, which emptied all four execution panels at once while the pipeline underneath —
+// log lines, promtail delivery, Loki labels — stayed perfectly healthy. Accept both so the
+// dashboard keeps working against nodes on either side of the change.
+const US = String.raw`(?:µs|us)`;
+const EXEC_RE = new RegExp(
+  String.raw`__exec_block,bl=(\d+),id=(0x[0-9a-fA-F]+),ts=(\d+),tx=\s*(\d+),rt=\s*(\d+),` +
+  String.raw`rtp=\s*([\d.]+)%,sr=\s*(\d+)${US},txe=\s*(\d+)${US},cmt=\s*(\d+)${US},` +
+  String.raw`tot=\s*(\d+)${US},tpse=\s*(\d+),tps=\s*(\d+),gas=\s*(\d+),gpse=\s*(\d+),gps=\s*(\d+)`
+);
 
 export function parseExecLine(line: string): ExecStat | null {
   const m = line.match(EXEC_RE);

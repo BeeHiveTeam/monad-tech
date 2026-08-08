@@ -408,10 +408,10 @@ The `/node` endpoint and its sub-routes are HTTP-Basic-auth protected (operator-
 
 | Source | What we read | Purpose |
 |--------|--------------|---------|
-| **Local Monad RPC** (`http://15.235.117.52:8080`) | `eth_blockNumber`, `eth_getBlockByNumber`, staking precompile | Chain state and validators. |
+| **Local Monad RPC** (`$MONAD_RPC_URL`, our own node) | `eth_blockNumber`, `eth_getBlockByNumber`, staking precompile | Chain state and validators. |
 | **Loki** (`http://127.0.0.1:3100`) | journald logs from monad-bft, monad-execution, monad-rpc | Logs, `__exec_block` parsing, peer IPs, critical-log detection. |
 | **InfluxDB 1.x** (`https://localhost:8086`, db `monad`) | Persisted metrics: `monad_chain`, `monad_exec`, `monad_reorgs`, `monad_valset_changes` | Long-range history (>15min Loki window). |
-| **otelcol Prometheus** (`http://15.235.117.52:8889/metrics`) | Validator's own metrics export | Resource usage, peer counts, version. |
+| **otelcol Prometheus** (`$NODE_METRICS_URL`, our own node) | Validator's own metrics export | Resource usage, peer counts, version. |
 | **GitHub** (`category-labs/monad-bft` releases) | Latest release tag | Client version comparison. |
 | **ip-api.com** | Peer IP → country / ASN | Geo distribution. |
 

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { rpcBatch } from '@/lib/rpc';
 import { ensureRegistryLoaded, getRegistryEntries } from '@/lib/validator-registry';
 import { getValidatorInfo } from '@/lib/validator-monikers';
+import { MONAD_RPC_URL } from '@/lib/config';
 
 const STAKING_PRECOMPILE = '0x0000000000000000000000000000000000001000';
 const SEL_GET_DELEGATORS = '0xa0843a26'; // getDelegators(uint64,address)
@@ -54,7 +55,7 @@ export async function GET(req: NextRequest) {
   let resolvedAddress: string | null = null;
   let moniker: string | null = null;
 
-  await ensureRegistryLoaded(process.env.MONAD_RPC_URL || 'http://15.235.117.52:8080');
+  await ensureRegistryLoaded(MONAD_RPC_URL);
 
   if (idParam) {
     validatorId = parseInt(idParam, 10);
