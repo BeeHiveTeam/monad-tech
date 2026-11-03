@@ -8,7 +8,13 @@ export async function register() {
   // would spawn multiple overlapping pollers.
   if (process.env.NEXT_RUNTIME !== 'nodejs') return;
   // Isolated release verification must not duplicate production collectors.
-  if (process.env.MONAD_BACKGROUND_DISABLED === '1') return;
+  if (process.env.MONAD_BACKGROUND_DISABLED === '1') {
+    if (process.env.MONAD_STREAM_CHECK === '1') {
+      const { startWsBlockStream } = await import('./lib/wsBlockStream');
+      startWsBlockStream();
+    }
+    return;
+  }
 
   // Re-entrancy guard across hot reloads / multiple register() calls.
   const g = globalThis as { __monadPollerStarted__?: boolean };

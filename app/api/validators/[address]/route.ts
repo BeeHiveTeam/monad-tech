@@ -54,7 +54,10 @@ export async function GET(
       : NETWORKS[network].rpc;
     await ensureRegistryLoaded(rpcUrl, network);
 
-    let blocks = getBlockCache(network) as {
+    // No mainnet performance scanner: metadata must not trigger a 500-block
+    // public-RPC fetch or borrow testnet's block cache.
+    const source = network === 'mainnet' ? 'registry-only' : 'block-sample';
+    let blocks = (network === 'mainnet' ? [] : getBlockCache(network)) as {
       miner: string; number: string; timestamp: string;
       transactions: unknown[]; hash: string;
     }[] | null;
@@ -241,6 +244,7 @@ export async function GET(
     const data = {
       address: addr,
       network,
+      source,
       registry,
       moniker: info?.moniker ?? null,
       info,
@@ -279,7 +283,7 @@ export async function GET(
         windowSeconds,
       },
       recentBlocks,
-      dataAsOf: newestTs * 1000,
+      dataAsOf: source === 'registry-only' ? (registry.fetchedAt ?? 0) : newestTs * 1000,
       attribution: { complete: attributionComplete, source: 'validator-reward-events', longWindow: 'unavailable', activeSetComplete },
       fetchedAt: Date.now(),
     };
@@ -292,11 +296,12 @@ export async function GET(
 }
 
 function snapshotResponse(raw: unknown) {
-  const data = raw as { network: NetworkId; dataAsOf: number; stats: { lastBlockTs: number; ageSeconds: number; health: import('@/lib/validatorMetrics').ValidatorHealth }; realizedApr: unknown; compositeScore: unknown };
+  const data = raw as { network: NetworkId; source: string; dataAsOf: number; stats: { lastBlockTs: number; ageSeconds: number; health: import('@/lib/validatorMetrics').ValidatorHealth }; realizedApr: unknown; compositeScore: unknown };
   const now = Date.now();
   const registry = getRegistryStatus(data.network);
-  const stale = !registry.complete || registry.stale || now - data.dataAsOf > 60_000;
+  const registryOnly = data.source === 'registry-only';
+  const stale = !registry.complete || registry.stale || (!registryOnly && now - data.dataAsOf > 60_000);
   return { ...data, registry, receivedAt: now, stale,
-    stats: applyValidatorFreshness(data.stats, stale ? 0 : data.dataAsOf, now),
+    stats: applyValidatorFreshness(data.stats, stale ? 0 : registryOnly ? now : data.dataAsOf, now),
     ...(stale ? { realizedApr: null, compositeScore: null } : {}) };
 }

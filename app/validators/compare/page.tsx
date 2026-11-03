@@ -94,7 +94,7 @@ function CompareInner() {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         const j = await r.json() as ApiResponse;
         if (!controller.signal.aborted) { setData(j); setLoading(false); }
-      } catch { if (!controller.signal.aborted) setLoading(false); }
+      } catch { if (!controller.signal.aborted) { setLoading(false); setData(previous => previous ? { ...previous, stale: true } : null); } }
     };
     queueMicrotask(() => { if (!controller.signal.aborted) { setData(null); setLoading(true); void refresh(); } });
     const timer = setInterval(() => { void refresh(); }, 30_000);

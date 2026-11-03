@@ -128,7 +128,10 @@ export default function ValidatorDetailPage() {
         const d = await r.json();
         if (!controller.signal.aborted) { setData(d); setLoading(false); }
       } catch {
-        if (!controller.signal.aborted) setLoading(false);
+        if (!controller.signal.aborted) {
+          setLoading(false);
+          setData(previous => previous ? { ...previous, stale: true } : null);
+        }
       }
     };
     queueMicrotask(() => { if (!controller.signal.aborted) { setLoading(true); setData(null); void refresh(); } });
@@ -150,6 +153,7 @@ export default function ValidatorDetailPage() {
         <main className="site-main">
           <TabNav />
 
+          {data?.stale && <div role="status" style={{ color: '#E8A020', fontSize: 12, marginBottom: 12 }}>Showing an older snapshot. Current performance is unavailable until the source recovers.</div>}
           {/* Breadcrumb */}
           <div style={{ marginBottom: 16, fontSize: 12, color: 'var(--text-muted)' }}>
             <Link href="/validators" style={{ color: 'var(--gold-dim)', textDecoration: 'none' }}>

@@ -58,8 +58,11 @@ async function computeValidators(network: NetworkId) {
   const ring = network === 'testnet' && scannerFresh
     ? getRingBlocks(1000).filter(b => b.txs !== null && b.number <= scanner.highestBlock).slice(0, SAMPLE_BLOCKS)
     : [];
-  const source = ring.length >= 100 ? 'ws-ring' as const : 'rpc-sample' as const;
-  let blocks: unknown[] = source === 'ws-ring'
+  // Mainnet currently has registry metadata only; fetching 500 blocks cannot
+  // produce trustworthy performance without a network-specific event scanner.
+  const source = network === 'mainnet' ? 'registry-only' as const
+    : ring.length >= 100 ? 'ws-ring' as const : 'rpc-sample' as const;
+  let blocks: unknown[] = source === 'registry-only' ? [] : source === 'ws-ring'
     ? ring.map(b => ({ number: '0x' + b.number.toString(16), timestamp: '0x' + b.timestamp.toString(16),
         miner: b.miner, hash: b.hash, transactions: b.txs!.map(t => t.hash) }))
     : await getLatestBlocksBatched(network, SAMPLE_BLOCKS, false, 20, 200);
@@ -67,7 +70,7 @@ async function computeValidators(network: NetworkId) {
   if (scannerFresh && source === 'rpc-sample') {
     blocks = (blocks as { number: string }[]).filter(b => parseInt(b.number, 16) <= scanner.highestBlock);
   }
-  setBlockCache(network, blocks as Parameters<typeof setBlockCache>[1]);
+  if (network === 'testnet') setBlockCache(network, blocks as Parameters<typeof setBlockCache>[1]);
 
   // Per-ID chain data (NOT auth-deduped registry) — used for both attribution
   // (idToAuth lookup) and stake rollup (computeAuthStake / computeTotalActiveStake).
@@ -347,7 +350,7 @@ async function computeValidators(network: NetworkId) {
       firstBlock: (aggregateState?.firstBlock ?? null),
     },
     updatedAt: Date.now(),
-    dataAsOf: newestTs * 1000,
+    dataAsOf: source === 'registry-only' ? (registry.fetchedAt ?? 0) : newestTs * 1000,
     attribution: { complete: attributionComplete, source: 'validator-reward-events', longWindow: 'unavailable', activeSetComplete },
     validators,
   };
@@ -358,9 +361,10 @@ function snapshotResponse(raw: unknown) {
   const now = Date.now();
   const dataAsOf = data.dataAsOf || data.updatedAt;
   const registry = getRegistryStatus(data.network);
-  const effectiveAsOf = registry.complete && !registry.stale ? dataAsOf : 0;
+  const registryOnly = data.source === 'registry-only';
+  const effectiveAsOf = registry.complete && !registry.stale ? (registryOnly ? now : dataAsOf) : 0;
   return { ...data, registry, dataAsOf, receivedAt: now,
-    stale: !registry.complete || registry.stale || now - dataAsOf > 60_000, ageSeconds: Math.max(0, Math.floor((now - dataAsOf) / 1000)),
+    stale: !registry.complete || registry.stale || (!registryOnly && now - dataAsOf > 60_000), ageSeconds: Math.max(0, Math.floor((now - dataAsOf) / 1000)),
     validators: data.validators.map(v => applyValidatorFreshness(v, effectiveAsOf, now)) };
 }
 

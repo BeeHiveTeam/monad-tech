@@ -99,3 +99,76 @@ test('RPC missing block/error is unavailable; empty transaction list is measured
   assert.equal(ws.transactionsFromRpcResult({result:{transactions:[]}}).length,0);
   assert.equal(ws.transactionsFromRpcResult({result:{transactions:['0xhash']}}),null);
 });
+
+test('mainnet registry-only listing never fetches 500 blocks or borrows testnet blocks', async () => {
+  let blockFetches=0;
+  const fetchedAt=Date.now()-120_000; // Metadata can be older than a minute and still valid registry data.
+  const owner='0xowner';
+  const info={authAddress:owner,validatorId:1,stakeMon:20_000_000,commissionPct:10,moniker:'Operator'};
+  const {loadTS}=createLoader({globals:{process:{env:{MONAD_BACKGROUND_DISABLED:'1'}}},mocks:{
+    'next/server':{NextResponse:{json:(body,options)=>({body,status:options?.status??200})}},
+    '@/lib/rpc':{getLatestBlocksBatched:async()=>{blockFetches++;throw Error('mainnet block fetch forbidden');}},
+    '@/lib/networks':{NETWORKS:{testnet:{active:true,rpc:'https://test.invalid'},mainnet:{active:true,rpc:'https://main.invalid'}}},
+    '@/lib/validator-monikers':{getValidatorInfo:()=>info},
+    '@/lib/validator-registry':{
+      ensureRegistryLoaded:async()=>{},getRegistryEntries:()=>[info],
+      getConsensusIds:()=>new Set([1]),getChainDataById:()=>new Map([[1,info]]),
+      getRegistryStatus:()=>({complete:true,stale:false,fetchedAt,error:null})
+    },
+    '@/lib/block-cache':{setBlockCache:()=>{throw Error('must not replace a block cache with metadata');}},
+    '@/lib/listResultCache':{setListResult:()=>{}},
+    '@/lib/wsBlockStream':{getAggregateState:()=>{throw Error('must not use testnet aggregate');},getLatestBlocks:()=>{throw Error('must not use testnet ring');}},
+    '@/lib/beneficiaryMap':{getBeneficiaryMapState:()=>({highestBlock:0,ageMs:-1}),getValidatorIdForBlock:()=>null,recordBeneficiary:()=>{},getBeneficiaryForValidator:()=>null},
+  }});
+  const api=loadTS('app/api/validators/route.ts');
+  const req={nextUrl:new URL('https://example.invalid/api/validators?network=mainnet')};
+  await api.GET(req);
+  await new Promise(resolve=>setTimeout(resolve,0));
+  const response=await api.GET(req);
+  assert.equal(blockFetches,0);
+  assert.equal(response.status,200);
+  assert.equal(response.body.source,'registry-only');
+  assert.equal(response.body.sampleSize,0);
+  assert.equal(response.body.dataAsOf,fetchedAt);
+  assert.equal(response.body.stale,false);
+  assert.equal(response.body.validators.length,1);
+  assert.equal(response.body.validators[0].participationPct,null);
+  assert.equal(response.body.validators[0].aprDelegator,null);
+  assert.equal(response.body.validators[0].health,'unknown');
+});
+
+test('mainnet detail is registry-only and cannot fetch or borrow any block sample', async () => {
+  let blockFetches=0;
+  const fetchedAt=Date.now()-120_000;
+  const owner='0xowner';
+  const info={authAddress:owner,validatorId:1,stakeMon:20_000_000,commissionPct:10,moniker:'Operator'};
+  const {loadTS}=createLoader({mocks:{
+    'next/server':{NextResponse:{json:(body,options)=>({body,status:options?.status??200})}},
+    '@/lib/rpc':{getLatestBlocksBatched:async()=>{blockFetches++;throw Error('mainnet block fetch forbidden');}},
+    '@/lib/networks':{NETWORKS:{testnet:{active:true,rpc:'https://test.invalid'},mainnet:{active:true,rpc:'https://main.invalid'}}},
+    '@/lib/validator-monikers':{getValidatorInfo:()=>info},
+    '@/lib/validator-registry':{
+      ensureRegistryLoaded:async()=>{},getRegistryEntries:()=>[info],
+      getConsensusIds:()=>new Set([1]),getChainDataById:()=>new Map([[1,info]]),
+      getRegistryStatus:()=>({complete:true,stale:false,fetchedAt,error:null})
+    },
+    '@/lib/block-cache':{getBlockCache:()=>{throw Error('must not borrow a block cache');},setBlockCache:()=>{throw Error('must not alter block cache');}},
+    '@/lib/wsBlockStream':{getLatestBlocks:()=>{throw Error('must not use testnet ring');}},
+    '@/lib/beneficiaryMap':{getBeneficiaryMapState:()=>({highestBlock:0,ageMs:-1}),getValidatorIdForBlock:()=>null,getBeneficiaryForValidator:()=>null},
+  }});
+  const api=loadTS('app/api/validators/[address]/route.ts');
+  const req={nextUrl:new URL('https://example.invalid/api/validators/0xowner?network=mainnet')};
+  const response=await api.GET(req,{params:Promise.resolve({address:owner})});
+  assert.equal(blockFetches,0);
+  assert.equal(response.status,200);
+  assert.equal(response.body.source,'registry-only');
+  assert.equal(response.body.network,'mainnet');
+  assert.equal(response.body.context.sampleSize,0);
+  assert.equal(response.body.recentBlocks.length,0);
+  assert.equal(response.body.dataAsOf,fetchedAt);
+  assert.equal(response.body.stale,false);
+  assert.equal(response.body.info.moniker,'Operator');
+  assert.equal(response.body.stats.health,'unknown');
+  assert.equal(response.body.stats.participationPct,null);
+  assert.equal(response.body.realizedApr,null);
+});

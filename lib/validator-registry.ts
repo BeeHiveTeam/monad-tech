@@ -288,16 +288,21 @@ async function fetchConsensusSet(rpcUrl: string): Promise<Set<number>> {
 // staking precompile currently answers `method not supported`, so an empty result there is a
 // legitimate answer — retrying it every few minutes would rebuild the hammer loop this file
 // exists to avoid, at twelve times the hourly rate.
-async function enumerateOnChain(rpcUrl: string, maxProbeId = 500): Promise<{ map: Map<number, ChainValidatorData>; anyBatchFailed: boolean }> {
+async function enumerateOnChain(
+  rpcUrl: string,
+  maxProbeId = 500,
+  network: NetworkId = 'testnet',
+): Promise<{ map: Map<number, ChainValidatorData>; anyBatchFailed: boolean }> {
   const result = new Map<number, ChainValidatorData>();
   let anyBatchFailed = false;
-  // BATCH 50→25 to align with [[monad-rpc-pacing]] hard rule (cap at 25).
-  // 500/25 = 20 batches × 800ms pause = ~16s. Runs once per hour
-  // (REGISTRY_TTL_MS), no UX impact.
-  const BATCH = 25;
-  for (let off = 1; off <= maxProbeId; off += BATCH) {
+  // Public mainnet RPCs commonly cap individual methods at 25/sec, including
+  // methods inside a batch. Leave room for tip, gas, and consensus requests.
+  const batchSize = network === 'mainnet' ? 10 : 25;
+  const pauseMs = network === 'mainnet' ? 1_000 : 800;
+  const pause = () => new Promise<void>(resolve => setTimeout(resolve, pauseMs));
+  for (let off = 1; off <= maxProbeId; off += batchSize) {
     const requests = [];
-    for (let id = off; id < off + BATCH && id <= maxProbeId; id++) {
+    for (let id = off; id < off + batchSize && id <= maxProbeId; id++) {
       requests.push({
         jsonrpc: '2.0', id,
         method: 'eth_call',
@@ -307,32 +312,43 @@ async function enumerateOnChain(rpcUrl: string, maxProbeId = 500): Promise<{ map
         ],
       });
     }
-    try {
-      const res = await fetch(rpcUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(requests),
-        signal: AbortSignal.timeout(30_000),
-      });
-      if (!res.ok) { anyBatchFailed = true; continue; }
-      const items = await res.json() as Array<{ id: number; result?: string; error?: { message?: string } }>;
-      if (!Array.isArray(items)) { anyBatchFailed = true; continue; }
-      const returnedIds = new Set(items.map(item => item.id));
-      if (requests.some(request => !returnedIds.has(request.id))) anyBatchFailed = true;
-      for (const it of items) {
-        // Unsupported staking methods/unknown IDs may be legitimate empty results;
-        // rate-limit and transient JSON-RPC errors must not erase existing validators.
-        if (it.error && /rate|limit|timeout|temporar|internal|unavailable/i.test(it.error.message ?? '')) {
-          anyBatchFailed = true;
+    let succeeded = false;
+    // One sequential retry may recover a transient response without discarding
+    // the entire cold snapshot. Both retries and later batches retain pacing.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      if (attempt > 0) await pause();
+      try {
+        const res = await fetch(rpcUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(requests),
+          signal: AbortSignal.timeout(30_000),
+        });
+        if (!res.ok) throw new Error(`Validator batch HTTP ${res.status}`);
+        const items = await res.json() as Array<{ id: number; result?: string; error?: { message?: string } }>;
+        if (!Array.isArray(items)) throw new Error('Invalid validator batch response');
+        const returnedIds = new Set(items.map(item => item.id));
+        if (requests.some(request => !returnedIds.has(request.id))) {
+          throw new Error('Incomplete validator batch response');
         }
-        const data = decodeValidatorResult(it.result ?? '');
-        if (!data) continue;
-        if (data.authAddress === '0x0000000000000000000000000000000000000000') continue;
-        result.set(it.id, data);
-      }
-    } catch { anyBatchFailed = true; /* retry next batch */ }
-    // Stay under RPC rate limits
-    await new Promise(r => setTimeout(r, 800));
+        const batchResult = new Map<number, ChainValidatorData>();
+        for (const it of items) {
+          // Unsupported staking methods/unknown IDs may be legitimate empty
+          // results; transient errors require a retry, not a zero stake.
+          if (it.error && /rate|limit|timeout|temporar|internal|unavailable/i.test(it.error.message ?? '')) {
+            throw new Error('Transient validator batch error');
+          }
+          const data = decodeValidatorResult(it.result ?? '');
+          if (!data || data.authAddress === '0x0000000000000000000000000000000000000000') continue;
+          batchResult.set(it.id, data);
+        }
+        for (const [id, data] of batchResult) result.set(id, data);
+        succeeded = true;
+        break;
+      } catch { /* bounded retry, then mark this snapshot incomplete */ }
+    }
+    if (!succeeded) anyBatchFailed = true;
+    await pause();
   }
   return { map: result, anyBatchFailed };
 }
@@ -356,7 +372,7 @@ async function refreshRegistry(rpcUrl: string, network: NetworkId): Promise<void
     let consensusFailed = false;
     let githubFailed = false;
     const [chainResult, consensusIds, github] = await Promise.all([
-      enumerateOnChain(rpcUrl, 800),
+      enumerateOnChain(rpcUrl, 800, network),
       fetchConsensusSet(rpcUrl).catch(err => {
         consensusFailed = true;
         console.error(`[registry] [${network}] Consensus refresh failed; preserving previous set:`, err);

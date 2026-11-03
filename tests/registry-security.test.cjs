@@ -15,6 +15,9 @@ function registryFixture() {
   let hold = false;
   let gate;
   const scans = new Map();
+  const requests = [];
+  const pauses = [];
+  const attempts = new Map();
   const snapshots = new Map();
   const counters = { loads: 0 };
   class Clock extends Date { static now() { return now; } }
@@ -28,7 +31,7 @@ function registryFixture() {
     globals: {
       Date: Clock,
       console: { log() {}, warn() {}, error() {} },
-      setTimeout: callback => { queueMicrotask(callback); return 0; },
+      setTimeout: (callback, ms) => { pauses.push(ms); queueMicrotask(callback); return 0; },
       fetch: async (url, options) => {
         if (url.startsWith('https://api.github.com/')) {
           if (failure === 'github') throw new Error('GitHub unavailable');
@@ -37,6 +40,13 @@ function registryFixture() {
         if (url.startsWith('https://metadata.test/')) return response({ id: 1, name: 'Known validator', secp: 'public' });
         const body = JSON.parse(options.body);
         if (Array.isArray(body)) {
+          requests.push({ url, ids: body.map(item => item.id) });
+          const key = `${url}:${body[0].id}`;
+          attempts.set(key, (attempts.get(key) ?? 0) + 1);
+          if (body[0].id === 11 && (failure === 'always-429'
+              || (failure === 'once-429' && attempts.get(key) === 1))) {
+            return { ...response(null, false), status: 429 };
+          }
           if (body[0].id === 1) {
             scans.set(url, (scans.get(url) ?? 0) + 1);
             if (hold) await gate;
@@ -53,7 +63,7 @@ function registryFixture() {
     },
   });
   return {
-    registry, scans, snapshots, counters,
+    registry, scans, snapshots, counters, requests, pauses, attempts,
     advance: ms => { now += ms; },
     fail: kind => { failure = kind; },
     block: () => { hold = true; gate = new Promise(resolve => { release = resolve; }); },
@@ -154,6 +164,41 @@ test('empty consensus RPC payload cannot erase an existing canonical set', async
   assert.equal(f.registry.getConsensusIds(), previous);
   assert.equal(f.registry.getConsensusFetchedAt(), fetchedAt);
   assert.equal(f.registry.getRegistryStatus().stale, true);
+});
+
+test('mainnet enumeration stays at ten methods per paced batch and recovers one HTTP429', async () => {
+  const f = registryFixture();
+  f.fail('once-429');
+  await f.registry.ensureRegistryLoaded('https://rpc.test/mainnet', 'mainnet');
+  assert.equal(f.requests.length, 81);
+  assert.ok(f.requests.every(request => request.ids.length <= 10));
+  assert.equal(f.attempts.get('https://rpc.test/mainnet:11'), 2);
+  assert.equal(f.pauses.length, 81);
+  assert.ok(f.pauses.every(ms => ms === 1_000));
+  assert.equal(f.registry.getRegistryStatus('mainnet').complete, true);
+  assert.equal(f.registry.getRegistryStatus('mainnet').stale, false);
+  assert.equal(f.registry.getChainDataById('mainnet').size, 2);
+});
+
+test('mainnet failed batch is retried only once before retaining incomplete status', async () => {
+  const f = registryFixture();
+  f.fail('always-429');
+  await f.registry.ensureRegistryLoaded('https://rpc.test/mainnet', 'mainnet');
+  assert.equal(f.requests.length, 81);
+  assert.equal(f.attempts.get('https://rpc.test/mainnet:11'), 2);
+  assert.equal(f.registry.getRegistryStatus('mainnet').complete, false);
+  assert.equal(f.registry.getChainDataById('mainnet').size, 0);
+  await f.registry.ensureRegistryLoaded('https://rpc.test/mainnet', 'mainnet');
+  assert.equal(f.requests.length, 81);
+});
+
+test('testnet keeps its existing twenty-five-method and 800ms pacing', async () => {
+  const f = registryFixture();
+  await f.registry.ensureRegistryLoaded('https://rpc.test/testnet', 'testnet');
+  assert.equal(f.requests.length, 32);
+  assert.ok(f.requests.every(request => request.ids.length === 25));
+  assert.equal(f.pauses.length, 32);
+  assert.ok(f.pauses.every(ms => ms === 800));
 });
 
 test('public force refresh rejects before invoking any registry loader', async () => {
