@@ -55,6 +55,9 @@ function fmtTime(iso: string, range: string): string {
 
 export async function GET(req: NextRequest) {
   const sp = req.nextUrl.searchParams;
+  const network = sp.get('network') ?? 'testnet';
+  if (network !== 'testnet' && network !== 'mainnet') return NextResponse.json({ error: 'Invalid network' }, { status: 400 });
+  if (network === 'mainnet') return NextResponse.json({ network, points: [], available: false, comingSoon: true });
   const range = sp.get('range') ?? '15m';
   const startMs = sp.get('start') ? Number(sp.get('start')) : null;
   const endMs   = sp.get('end')   ? Number(sp.get('end'))   : null;

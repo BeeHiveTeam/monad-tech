@@ -15,10 +15,11 @@
  * NOT `windowBlocks / producerCount`.
  */
 
-export type ValidatorHealth = 'active' | 'slow' | 'missing';
+export type ValidatorHealth = 'active' | 'slow' | 'missing' | 'unknown';
 
 export interface ValidatorMetricsInput {
   blocksProduced: number;
+  attributionComplete?: boolean;
   firstBlockTs: number;       // 0 if validator produced no blocks in sample
   lastBlockTs: number;        // 0 if validator produced no blocks in sample
   newestTs: number;           // newest block ts in the sample
@@ -31,8 +32,8 @@ export interface ValidatorMetricsInput {
   totalActiveStake: number;
   // Long-window (cumulative WS aggregator since process start). Pass 0/0 if
   // the caller doesn't have aggregator data — participationLong will be null.
-  cumulativeBlocksObserved: number;  // aggregateState.totalBlocks
-  cumulativeMinerBlocks: number;     // agg.blocks for this validator
+  cumulativeBlocksObserved: number | null;  // aggregateState.totalBlocks
+  cumulativeMinerBlocks: number | null;     // agg.blocks for this validator
 }
 
 export interface ValidatorMetricsOutput {
@@ -81,7 +82,7 @@ export function computeValidatorMetrics(input: ValidatorMetricsInput): Validator
 
   const nowSec = Math.floor(Date.now() / 1000);
   const ageSeconds = lastBlockTs > 0
-    ? Math.max(0, newestTs - lastBlockTs)
+    ? Math.max(0, nowSec - lastBlockTs)
     : Math.max(0, nowSec - oldestTs);
 
   const expectedGapSeconds = producersInWindow > 0 && totalBlocks > 0
@@ -110,12 +111,12 @@ export function computeValidatorMetrics(input: ValidatorMetricsInput): Validator
   const expectedBlocks = totalBlocks * stakeShare * activeRatio;
 
   let participationPct: number | null = null;
-  if (expectedBlocks > 0) {
+  if (expectedBlocks > 0 && input.attributionComplete !== false) {
     participationPct = round1((blocksProduced / expectedBlocks) * 100);
   }
 
   let participationLong: number | null = null;
-  if (stakeShare > 0 && cumulativeBlocksObserved > 0) {
+  if (stakeShare > 0 && cumulativeBlocksObserved != null && cumulativeMinerBlocks != null && cumulativeBlocksObserved > 0) {
     const expectedLong = cumulativeBlocksObserved * stakeShare;
     if (expectedLong >= 5) {
       participationLong = round1((cumulativeMinerBlocks / expectedLong) * 100);
@@ -123,7 +124,9 @@ export function computeValidatorMetrics(input: ValidatorMetricsInput): Validator
   }
 
   let health: ValidatorHealth;
-  if (blocksProduced === 0) {
+  if (input.attributionComplete === false) {
+    health = 'unknown';
+  } else if (blocksProduced === 0) {
     health = 'missing';
   } else if (ageSeconds < personalGapSeconds * 2) {
     health = 'active';
@@ -254,22 +257,22 @@ function round1(x: number): number {
 }
 
 /**
- * Realized APR derived from on-chain observation (not protocol parameters).
+ * Projected APR model, not a measurement of rewards received.
  *
  * On Monad each produced block emits a `ValidatorRewarded` event carrying the
- * delegator-pool share = `25 × (1 − commission)`. The validator's beneficiary
- * receives the commission portion directly via block.miner.
+ * delegator-pool share = `18 × (1 − commission)`. The commission portion is allocated to the validator's authAddress.
+ * The projection starts with gross reward and deducts commission exactly once.
  *
  * Method: use the stake-weighted expected block rate × participation factor
- * × per-block reward, annualised over a year of 0.4s blocks.
+ * × per-block reward, annualised over a year of 0.3s assumed blocks.
  *
  *   blocks_per_year_expected = (stakeShare × BLOCKS_PER_YEAR)
  *   blocks_per_year_realized = expected × (participationLong ?? participationPct ?? 100) / 100
- *   gross_rewards            = blocks_per_year_realized × 25
- *   delegator_rewards        = blocks_per_year_realized × 25 × (1 − commission/100)
+ *   gross_rewards            = blocks_per_year_realized × 18
+ *   delegator_rewards        = blocks_per_year_realized × 18 × (1 − commission/100)
  *   apr_gross_pct            = gross_rewards / stake × 100
  *   apr_delegator_pct        = delegator_rewards / stake × 100  (= what a delegator earns)
- *   apr_validator_commission = blocks_per_year_realized × 25 × commission/100  (commission flow)
+ *   apr_validator_commission = blocks_per_year_realized × 18 × commission/100  (commission flow)
  *
  * Note: Uses `participationLong` when available (cumulative WS aggregator, days
  * of data) because the 500-block sample window introduces ~5σ noise. Falls back
@@ -291,13 +294,16 @@ export interface RealizedAprOutput {
   aprGross: number;      // gross block-reward yield against stake
   blocksPerYearExpected: number;
   blocksPerYearRealized: number;
+  methodology: { kind: 'projection'; rewardPerBlockMon: number; assumedBlockTimeSeconds: number; participationSource: 'long-window' | 'sample'; commissionAppliedOnce: true };
 }
 
-const BLOCKS_PER_YEAR = 365 * 24 * 60 * 60 / 0.4; // 78,840,000 at 0.4s blocks
-const REWARD_PER_BLOCK_MON = 25;                  // canonical protocol reward
+export const PROJECTED_BLOCK_SECONDS = 0.3;
+const BLOCKS_PER_YEAR = 365 * 24 * 60 * 60 / PROJECTED_BLOCK_SECONDS; // 105,120,000 at the assumed cadence
+export const REWARD_PER_BLOCK_MON = 18;                  // canonical protocol reward
 
 export function computeRealizedApr(input: RealizedAprInput): RealizedAprOutput | null {
   if (!input.isActiveSet) return null;
+  if (input.commissionPct == null || (input.participationLong == null && input.participationPct == null)) return null;
   if (!input.stakeMon || input.stakeMon <= 0) return null;
   if (input.totalActiveStake <= 0) return null;
   const stakeShare = input.stakeMon / input.totalActiveStake;
@@ -317,6 +323,7 @@ export function computeRealizedApr(input: RealizedAprInput): RealizedAprOutput |
     aprGross: round1(aprGross),
     blocksPerYearExpected: Math.round(blocksPerYearExpected),
     blocksPerYearRealized: Math.round(blocksPerYearRealized),
+    methodology: { kind: 'projection', rewardPerBlockMon: REWARD_PER_BLOCK_MON, assumedBlockTimeSeconds: PROJECTED_BLOCK_SECONDS, participationSource: input.participationLong != null ? 'long-window' : 'sample', commissionAppliedOnce: true },
   };
 }
 
@@ -480,4 +487,18 @@ export function computeCompositeScore(input: CompositeScoreInput): CompositeScor
   };
 
   return { composite, axes };
+}
+
+
+/** Rebase ages to wall time; an old sample is not evidence of current health. */
+export function applyValidatorFreshness<T extends {
+  lastBlockTs: number; ageSeconds: number; health: ValidatorHealth;
+  aprDelegator?: number | null; aprGross?: number | null; participationPct?: number | null;
+}>(v: T, dataAsOf: number, now = Date.now()) {
+  const stale = now - dataAsOf > 60_000;
+  return { ...v,
+    ageSeconds: v.lastBlockTs > 0 ? Math.max(0, Math.floor(now / 1000) - v.lastBlockTs) : v.ageSeconds,
+    health: stale ? 'unknown' as const : v.health,
+    ...(stale ? { aprDelegator: null, aprGross: null, participationPct: null } : {}),
+  };
 }

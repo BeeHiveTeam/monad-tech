@@ -17,9 +17,10 @@ interface Validator {
   ageSeconds: number;
   participationPct: number | null;
   participationLong: number | null;
-  cumulativeBlocks: number;
-  cumulativeTxs: number;
-  health: 'active' | 'slow' | 'missing';
+  cumulativeBlocks: number | null;
+  attributionComplete?: boolean;
+  cumulativeTxs: number | null;
+  health: 'active' | 'slow' | 'missing' | 'unknown';
   stakeMon: number | null;
   commissionPct: number | null;
   registered: boolean;
@@ -27,6 +28,9 @@ interface Validator {
 }
 
 interface ApiResponse {
+  dataAsOf?: number;
+  stale?: boolean;
+  building?: boolean;
   validators: Validator[];
   activeValidators: number;
   totalActiveStakeMon: number;
@@ -37,6 +41,7 @@ const HEALTH_COLOR: Record<Validator['health'], string> = {
   active: '#4CAF6E',
   slow: '#E8A020',
   missing: '#E05252',
+  unknown: '#8A8870',
 };
 
 function fmtMon(n: number | null | undefined): string {
@@ -82,13 +87,19 @@ function CompareInner() {
   const [selected, setSelected] = useState<string[]>(initialAddrs);
 
   useEffect(() => {
-    let cancelled = false;
-    fetch('/api/validators?network=testnet', { cache: 'no-store' })
-      .then(r => r.json() as Promise<ApiResponse>)
-      .then(j => { if (!cancelled) { setData(j); setLoading(false); } })
-      .catch(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
-  }, []);
+    const controller = new AbortController();
+    const refresh = async () => {
+      try {
+        const r = await fetch(`/api/validators?network=${network}`, { cache: 'no-store', signal: controller.signal });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const j = await r.json() as ApiResponse;
+        if (!controller.signal.aborted) { setData(j); setLoading(false); }
+      } catch { if (!controller.signal.aborted) setLoading(false); }
+    };
+    queueMicrotask(() => { if (!controller.signal.aborted) { setData(null); setLoading(true); void refresh(); } });
+    const timer = setInterval(() => { void refresh(); }, 30_000);
+    return () => { controller.abort(); clearInterval(timer); };
+  }, [network]);
 
   // Find chosen validators (preserve order from `selected`)
   const chosen: Validator[] = useMemo(() => {
@@ -174,7 +185,7 @@ function CompareInner() {
   return (
     <div style={{ minHeight: '100vh', position: 'relative' }}>
       <HexBg />
-      <SiteHeader network={network} onNetworkChange={setNetwork} />
+      <SiteHeader network={network} onNetworkChange={setNetwork} liveState={loading || data?.building ? 'loading' : !data || data.stale ? 'offline' : 'live'} lastUpdate={data?.dataAsOf ? new Date(data.dataAsOf) : null} />
       <main style={{ maxWidth: 1200, margin: '0 auto', padding: '0 16px 60px' }}>
         <TabNav />
 
@@ -344,17 +355,17 @@ function CompareInner() {
                   }))}
                 />
                 <Row label="Last block age" cells={chosen.map(v => fmtAge(v.ageSeconds))} />
-                <SectionHeader title="LIVE WINDOW (sample 500 blocks ≈ 200s)" />
-                <Row label="Blocks (window)" cells={chosen.map(v => v.blocksProduced.toString())} />
-                <Row label="Share %" cells={chosen.map(v => fmtPct(v.sharePct))} />
+                <SectionHeader title="SAMPLED WINDOW (up to 500 blocks)" />
+                <Row label="Blocks (window)" cells={chosen.map(v => v.attributionComplete === false ? '—' : v.blocksProduced.toString())} />
+                <Row label="Share %" cells={chosen.map(v => v.attributionComplete === false ? '—' : fmtPct(v.sharePct))} />
                 <Row label="Participation %" cells={chosen.map(v => fmtPct(v.participationPct))} />
-                <Row label="Total txs (window)" cells={chosen.map(v => v.totalTxs.toString())} />
-                <SectionHeader title="LONG WINDOW (cumulative since process start)" />
+                <Row label="Total txs (window)" cells={chosen.map(v => v.attributionComplete === false ? '—' : v.totalTxs.toString())} />
+                <SectionHeader title="LONG WINDOW (unavailable without verified identity history)" />
                 <Row
                   label="Cumulative blocks"
-                  cells={chosen.map(v => ({ text: v.cumulativeBlocks.toString(), winner: v.address === winners.cumulativeBlocks }))}
+                  cells={chosen.map(v => ({ text: v.cumulativeBlocks?.toString() ?? '—', winner: v.address === winners.cumulativeBlocks }))}
                 />
-                <Row label="Cumulative txs" cells={chosen.map(v => v.cumulativeTxs.toString())} />
+                <Row label="Cumulative txs" cells={chosen.map(v => v.cumulativeTxs?.toString() ?? '—')} />
                 <Row
                   label="Participation Long"
                   cells={chosen.map(v => ({

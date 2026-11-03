@@ -41,21 +41,24 @@ interface HistoryPoint {
 
 interface Stats {
   blockNumber: number;
-  gasPrice: number;
-  tps: number;
-  avgBlockTime: number;
-  avgGasUtilization: number;
-  txInLatestBlock: number;
+  gasPrice: number | null;
+  tps: number | null;
+  avgBlockTime: number | null;
+  avgGasUtilization: number | null;
+  txInLatestBlock: number | null;
   latestBlockTimestamp: number;
   secondsSinceLastBlock: number;
   epoch: {
-    current: number;
+    current: number | null;
     blockInEpoch: number;
     blocksPerEpoch: number;
     blocksUntilNext: number;
-    secondsUntilNext: number;
+    secondsUntilNext: number | null;
+    inEpochDelayPeriod: boolean | null;
+    source: string;
     progressPct: number;
   };
+  sampleSize?: number;
   health: {
     state: 'normal' | 'congested' | 'offline';
     reason: string;
@@ -105,13 +108,13 @@ export default function Home() {
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const historyTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const fetchAll = useCallback(async () => {
+  const fetchAll = useCallback(async (signal?: AbortSignal) => {
     const net = network;
     try {
       const [statsRes, blocksRes, txsRes] = await Promise.all([
-        fetch(`/api/stats?network=${net}`),
-        fetch(`/api/blocks?network=${net}`),
-        fetch(`/api/transactions?network=${net}`),
+        fetch(`/api/stats?network=${net}`, { signal }),
+        fetch(`/api/blocks?network=${net}`, { signal }),
+        fetch(`/api/transactions?network=${net}`, { signal }),
       ]);
 
       if (!statsRes.ok) throw new Error('Stats fetch failed');
@@ -120,6 +123,7 @@ export default function Home() {
       const blocksData = await blocksRes.json();
       const txsData = await txsRes.json();
 
+      if (signal?.aborted) return;
       if (statsData.blockNumber) {
         setStats(statsData);
         setLastUpdate(new Date());
@@ -131,14 +135,16 @@ export default function Home() {
       setError(null);
       setFailCount(0);
     } catch (e) {
+      if (signal?.aborted) return;
       setError(String(e));
       setFailCount(c => c + 1);
     } finally {
-      setLoading(false);
+      if (!signal?.aborted) setLoading(false);
     }
   }, [network]);
 
-  const fetchHistory = useCallback(async (r: RangeKey, mode: ChartMode) => {
+  const fetchHistory = useCallback(async (r: RangeKey, signal?: AbortSignal) => {
+    if (network !== 'testnet') { setHistoryPoints([]); return; }
     try {
       // All chart modes (TPS, Gas, Util) read from InfluxDB-backed /api/history.
       // Single source of truth: monad_chain measurement, fed every 15s by the
@@ -148,28 +154,31 @@ export default function Home() {
       // was removed — visually 30+ buckets is sufficient and InfluxDB-only
       // architecture eliminates the 1Hz tickTpsCollector poller (~150 RPC
       // methods/min saved).
-      const res = await fetch(`/api/history?range=${r}`);
+      const res = await fetch(`/api/history?range=${r}&network=${network}`, { signal });
       const json = await res.json() as { points: HistoryPoint[] };
-      if (json.points) setHistoryPoints(json.points);
+      if (!signal?.aborted && json.points) setHistoryPoints(json.points);
     } catch {
       // non-critical
     }
-  }, []);
+  }, [network]);
 
   useEffect(() => {
+    const controller = new AbortController();
     setLoading(true);
     setStats(null);
     setBlocks([]);
     setTxs([]);
-    fetchAll();
+    void fetchAll(controller.signal);
 
     if (timerRef.current) clearInterval(timerRef.current);
-    timerRef.current = setInterval(fetchAll, POLL_INTERVAL);
-    return () => { if (timerRef.current) clearInterval(timerRef.current); };
+    timerRef.current = setInterval(() => { void fetchAll(controller.signal); }, POLL_INTERVAL);
+    return () => { controller.abort(); if (timerRef.current) clearInterval(timerRef.current); };
   }, [fetchAll, network]);
 
   useEffect(() => {
-    fetchHistory(range, chartMode);
+    const controller = new AbortController();
+    setHistoryPoints([]);
+    void fetchHistory(range, controller.signal);
     if (historyTimerRef.current) clearInterval(historyTimerRef.current);
     // Refresh cadence: short TPS ranges need frequent updates to keep the
     // rightmost bar fresh. Longer ranges change slowly — poll less often.
@@ -177,8 +186,8 @@ export default function Home() {
       chartMode === 'tps' && (range === '5m' || range === '15m' || range === '1h') ? 2_000
       : chartMode === 'tps' ? 15_000
       : HISTORY_POLL_MS;
-    historyTimerRef.current = setInterval(() => fetchHistory(range, chartMode), pollMs);
-    return () => { if (historyTimerRef.current) clearInterval(historyTimerRef.current); };
+    historyTimerRef.current = setInterval(() => { void fetchHistory(range, controller.signal); }, pollMs);
+    return () => { controller.abort(); if (historyTimerRef.current) clearInterval(historyTimerRef.current); };
   }, [range, chartMode, fetchHistory]);
 
   const net = NETWORKS[network];
@@ -238,6 +247,7 @@ export default function Home() {
                 blocksUntilNext={stats.epoch.blocksUntilNext}
                 secondsUntilNext={stats.epoch.secondsUntilNext}
                 progressPct={stats.epoch.progressPct}
+                inEpochDelayPeriod={stats.epoch.inEpochDelayPeriod}
               />
             ) : (
               <div className="card" style={{ padding: '20px 24px', color: 'var(--text-muted)', fontSize: 13, display: 'flex', alignItems: 'center' }}>
@@ -260,29 +270,29 @@ export default function Home() {
             />
             <StatCard
               label="TPS"
-              value={stats ? stats.tps.toFixed(2) : '—'}
+              value={stats?.tps != null ? stats.tps.toFixed(2) : '—'}
               sub="transactions/sec"
               icon={<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>}
             />
             <StatCard
               label="Gas Price"
-              value={stats ? `${stats.gasPrice.toFixed(2)} Gwei` : '—'}
+              value={stats?.gasPrice != null ? `${stats.gasPrice.toFixed(2)} Gwei` : '—'}
               icon={<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17"/></svg>}
             />
             <StatCard
               label="Block Time"
-              value={stats ? `${stats.avgBlockTime.toFixed(1)}s` : '—'}
-              sub="avg last 10 blocks"
+              value={stats?.avgBlockTime != null ? `${stats.avgBlockTime.toFixed(3)}s` : '—'}
+              sub={`avg last ${stats?.sampleSize ?? 10} blocks`}
               icon={<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>}
             />
             <StatCard
               label="Tx in last block"
-              value={stats ? stats.txInLatestBlock : '—'}
+              value={stats?.txInLatestBlock ?? '—'}
               icon={<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M17 1l4 4-4 4"/><path d="M3 11V9a4 4 0 014-4h14"/><path d="M7 23l-4-4 4-4"/><path d="M21 13v2a4 4 0 01-4 4H3"/></svg>}
             />
             <StatCard
               label="Block Utilization"
-              value={stats ? `${stats.avgGasUtilization.toFixed(1)}%` : '—'}
+              value={stats?.avgGasUtilization != null ? `${stats.avgGasUtilization.toFixed(1)}%` : '—'}
               sub="avg gas used / limit"
               icon={<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>}
             />

@@ -8,6 +8,8 @@ import { getValidatorInfo } from '@/lib/validator-monikers';
 import { ensureRegistryLoaded, getChainDataById, getConsensusIds } from '@/lib/validator-registry';
 import { operatorRollup, nakamotoCoefficient } from '@/lib/concentration';
 import { NETWORKS } from '@/lib/networks';
+import { getLatestBlocks as getRingBlocks } from '@/lib/wsBlockStream';
+import { cadenceFromArrivals, cadenceFromChainSeconds } from '@/lib/blockCadence';
 
 export const dynamic = 'force-dynamic';
 
@@ -55,6 +57,18 @@ export async function GET() {
   const reorg = getReorgState();
   const geo = getGeoSummary();
   const setChanges = getSetChanges();
+
+  // Block cadence. Read from the WS ring because `receivedAt` is the only
+  // millisecond-resolution stamp we have — chain `block.timestamp` is whole
+  // seconds and Monad blocks are ~0.4 s, so dispersion is unrecoverable from
+  // it (see lib/blockCadence.ts header). 60 blocks ≈ 24 s of wall clock:
+  // enough intervals for a stable stddev, short enough to still be "now".
+  const ringForCadence = getRingBlocks(60);
+  const cadence = ringForCadence.length >= 3
+    ? cadenceFromArrivals(ringForCadence)
+    // No ring (mainnet view, or within seconds of a restart): return the
+    // empty chain-seconds shape rather than a number we cannot source.
+    : cadenceFromChainSeconds([]);
 
   // Merge in-memory reorgs with InfluxDB history. Detector ring resets on
   // PM2 restart so without this the page would render empty for the first
@@ -127,6 +141,7 @@ export async function GET() {
 
   return NextResponse.json({
     fetchedAt: Date.now(),
+    cadence,
     decentralization: {
       // `totalValidators` = all registered chain-data IDs (active + inactive).
       // `activeValidators` = distinct OPERATORS in the canonical consensus set

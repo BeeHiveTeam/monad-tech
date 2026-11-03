@@ -121,18 +121,17 @@ export async function getTip(network: NetworkId = 'testnet'): Promise<TipBlock> 
   if (S.inflight) {
     return S.inflight;
   }
-  // Assign S.inflight BEFORE chaining .finally — so the cleanup closure can
-  // identity-check that it's still our promise (defensive: protects the
-  // invariant against future refactors that might overwrite S.inflight).
+  // Store and return the cleanup chain itself: ignoring a separate .finally()
+  // promise would emit an unhandled rejection even when callers catch the error.
   const p = fetchTipFresh(network)
     .then(data => {
       S.tip = { data, fetchedAt: Date.now() };
       return data;
+    })
+    .finally(() => {
+      if (S.inflight === p) S.inflight = null;
     });
   S.inflight = p;
-  p.finally(() => {
-    if (S.inflight === p) S.inflight = null;
-  });
   return p;
 }
 

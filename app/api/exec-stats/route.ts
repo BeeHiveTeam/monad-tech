@@ -24,6 +24,9 @@ const MAX_POINTS: Record<string, number> = {
 const LOKI_MAX_SECONDS = 900;
 
 export async function GET(req: NextRequest) {
+  const network = req.nextUrl.searchParams.get('network') ?? 'testnet';
+  if (network !== 'testnet' && network !== 'mainnet') return NextResponse.json({ error: 'Invalid network' }, { status: 400 });
+  if (network === 'mainnet') return NextResponse.json({ network, available: false, comingSoon: true, points: [], summary: null });
   const range = req.nextUrl.searchParams.get('range') ?? '15m';
   if (!(range in RANGE_SECONDS)) {
     return NextResponse.json({ error: 'Invalid range' }, { status: 400 });

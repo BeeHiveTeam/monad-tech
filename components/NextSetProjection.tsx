@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 
-type Phase = 'post-rotation' | 'active' | 'pre-snapshot' | 'unknown';
+type Phase = 'epoch-delay' | 'post-rotation' | 'active' | 'pre-snapshot' | 'unknown';
 
 interface SetMember {
   validatorId: number;
@@ -21,16 +21,20 @@ interface NextSetData {
   building?: boolean;
   epoch: {
     currentEpoch: number;
-    blockInEpoch: number;
+    blockInEpoch: number | null;
     blocksPerEpoch: number;
-    blocksUntilNext: number;
-    progressPct: number;
+    blocksUntilNext: number | null;
+    progressPct: number | null;
+    inEpochDelayPeriod?: boolean;
   } | null;
   phase: Phase;
   currentSetSize: number;
   projectedSetSize: number;
   joining: SetMember[];
   leaving: SetMember[];
+  uncertainLeaving?: SetMember[];
+  projectionComplete?: boolean;
+  projectionNote?: string;
   movers: SetMember[];
   thresholds: { moveMon: number; movePct: number };
 }
@@ -46,6 +50,7 @@ function shortAddr(addr: string): string {
 }
 
 const PHASE_STYLE: Record<Phase, { bg: string; fg: string; label: string; hint: string }> = {
+  'epoch-delay': { bg: 'rgba(201,168,76,0.14)', fg: '#C9A84C', label: 'EPOCH DELAY', hint: 'The boundary has passed; the next epoch starts after the consensus round delay.' },
   'active':        { bg: 'rgba(76,175,110,0.14)',  fg: '#4CAF6E', label: 'ACTIVE PHASE',
                      hint: 'Normal operation. Stake changes affect the *next* snapshot.' },
   'pre-snapshot':  { bg: 'rgba(201,168,76,0.14)',  fg: '#C9A84C', label: 'PRE-SNAPSHOT',
@@ -58,16 +63,25 @@ const PHASE_STYLE: Record<Phase, { bg: string; fg: string; label: string; hint: 
 export default function NextSetProjection({ network }: { network: string }) {
   const [data, setData] = useState<NextSetData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     const ctrl = new AbortController();
     setLoading(true);
+    setData(null);
+    setError(null);
     fetch(`/api/network/next-set?network=${network}`, { signal: ctrl.signal })
-      .then(r => r.json())
-      .then(d => { setData(d); setLoading(false); })
-      .catch(e => { if (e?.name !== 'AbortError') setLoading(false); });
+      .then(async r => {
+        const d = await r.json();
+        if (!r.ok || d.error) throw new Error(d.error || `HTTP ${r.status}`);
+        return d;
+      })
+      .then(d => { if (!ctrl.signal.aborted) { setData(d); setLoading(false); } })
+      .catch(e => { if (!ctrl.signal.aborted) { setError(String(e)); setLoading(false); } });
     return () => ctrl.abort();
   }, [network]);
+
+  if (error) return <div className="card" role="status" style={{ padding: 24, color: 'var(--text-muted)' }}>Next-set projection unavailable. Try again shortly.</div>;
 
   if (loading || !data) {
     return (
@@ -84,7 +98,7 @@ export default function NextSetProjection({ network }: { network: string }) {
     );
   }
 
-  const phase = PHASE_STYLE[data.phase];
+  const phase = PHASE_STYLE[data.phase] ?? PHASE_STYLE.unknown;
 
   return (
     <div className="card" style={{ padding: '20px 24px' }}>
@@ -94,8 +108,7 @@ export default function NextSetProjection({ network }: { network: string }) {
             Next-Set Projection
           </div>
           <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4, maxWidth: 620 }}>
-            Who joins / leaves / moves at the next epoch rotation, projected from
-            <strong> snapshotStake (slot 8)</strong>. The set is fixed when the snapshot is taken at epoch end; this is the answer to "why is my dashboard stake different from my wallet?"
+            Estimated set changes from stake snapshots. This is a projection, not a confirmed future consensus set. Epoch state is read from the staking contract.
           </div>
         </div>
         <div style={{
@@ -111,7 +124,16 @@ export default function NextSetProjection({ network }: { network: string }) {
 
       {data.epoch && (
         <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 14 }}>
-          Epoch <strong style={{ color: 'var(--gold)' }}>#{data.epoch.currentEpoch}</strong> · block {data.epoch.blockInEpoch.toLocaleString()} / {data.epoch.blocksPerEpoch.toLocaleString()} ({data.epoch.progressPct.toFixed(1)}%) · <strong>{data.epoch.blocksUntilNext.toLocaleString()} blocks until rotation</strong>
+          Epoch <strong style={{ color: 'var(--gold)' }}>#{data.epoch.currentEpoch}</strong>
+          {data.epoch.inEpochDelayPeriod ? ' · transition pending (consensus round delay)'
+            : data.epoch.blocksUntilNext != null ? ` · approximately ${data.epoch.blocksUntilNext.toLocaleString()} blocks to the next boundary` : ''}
+
+        </div>
+      )}
+
+      {data.projectionComplete === false && (
+        <div role="status" style={{ color: '#E8A020', fontSize: 12, marginBottom: 14 }}>
+          Incomplete projection: {data.uncertainLeaving?.length ?? 0} possible departures are uncertain due to snapshot rotation. They are not counted as confirmed leaving.
         </div>
       )}
 

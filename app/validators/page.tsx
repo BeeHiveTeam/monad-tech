@@ -8,10 +8,9 @@ import TabNav from '@/components/TabNav';
 import Pagination from '@/components/Pagination';
 import { NETWORKS } from '@/lib/networks';
 import { useNetwork } from '@/lib/useNetwork';
-import MainnetSoonCard from '@/components/MainnetSoonCard';
 import { computeValidatorScore } from '@/lib/validatorMetrics';
 
-type Health = 'active' | 'slow' | 'missing';
+type Health = 'active' | 'slow' | 'missing' | 'unknown';
 type ViewMode = 'operator' | 'delegator';
 type SortKey = 'score' | 'rank' | 'health' | 'uptime' | 'blocks' | 'share' | 'txs' | 'age' | 'stake' | 'commission' | 'apr' | 'pick';
 
@@ -24,7 +23,8 @@ interface Validator {
   lastBlockTs: number;
   sharePct: number;
   ageSeconds: number;
-  participationPct: number;
+  participationPct: number | null;
+  attributionComplete?: boolean;
   health: Health;
   stakeMon?: number;
   commissionPct?: number;
@@ -44,6 +44,7 @@ interface ValidatorsData {
   windowSeconds: number;
   expectedGapSeconds: number;
   updatedAt: number;
+  dataAsOf?: number;
   validators: Validator[];
   stale?: boolean;
   ageSeconds?: number;
@@ -51,8 +52,9 @@ interface ValidatorsData {
   message?: string;
 }
 
-const HEALTH_ORDER: Record<Health, number> = { active: 0, slow: 1, missing: 2 };
+const HEALTH_ORDER: Record<Health, number> = { active: 0, slow: 1, missing: 2, unknown: 3 };
 const HEALTH_STYLE: Record<Health, { bg: string; fg: string; label: string }> = {
+  unknown: { bg: 'rgba(138,136,112,0.14)', fg: '#8A8870', label: 'UNKNOWN' },
   active:  { bg: 'rgba(76,175,110,0.14)', fg: '#4CAF6E', label: 'ACTIVE' },
   slow:    { bg: 'rgba(201,168,76,0.14)', fg: '#C9A84C', label: 'SLOW' },
   missing: { bg: 'rgba(224,82,82,0.14)',  fg: '#E05252', label: 'MISSING' },
@@ -122,8 +124,8 @@ function calcScore(v: Validator, expectedGapSeconds: number): number {
  *     < 5%              → 0.85
  *     ≥ 5%              → 0.60   (whale, penalised)
  */
-function pickScore(v: Validator, totalStake: number): number {
-  if (!v.aprDelegator || !v.isActiveSet) return 0;
+function pickScore(v: Validator, totalStake: number): number | null {
+  if (v.aprDelegator == null || !v.isActiveSet || v.health === 'unknown') return null;
   const part = v.participationLong ?? v.participationPct ?? 100;
   const healthFactor =
     v.health === 'active' && part >= 90 ? 1.0 :
@@ -233,6 +235,7 @@ function ValidatorsPageInner() {
   }, [selectedForCompare, router]);
   const PAGE_SIZE = 20;
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const requestGeneration = useRef(0);
 
   // Restore saved widths from localStorage
   useEffect(() => {
@@ -281,20 +284,23 @@ function ValidatorsPageInner() {
   }, []);
 
   const fetchData = useCallback(async () => {
+    const generation = requestGeneration.current;
     try {
       const res = await fetch(`/api/validators?network=${network}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = await res.json();
+      if (generation !== requestGeneration.current) return;
       if (json.error) throw new Error(json.error);
       setData(json);
-      setLastUpdate(new Date());
+      setLastUpdate(new Date(json.dataAsOf ?? json.updatedAt ?? 0));
       setError(null);
       setFailCount(0);
     } catch (e) {
+      if (generation !== requestGeneration.current) return;
       setError(String(e));
       setFailCount(c => c + 1);
     } finally {
-      setLoading(false);
+      if (generation === requestGeneration.current) setLoading(false);
     }
   }, [network]);
 
@@ -311,7 +317,7 @@ function ValidatorsPageInner() {
     fetchData();
     if (timerRef.current) clearInterval(timerRef.current);
     timerRef.current = setInterval(fetchData, POLL_INTERVAL);
-    return () => { if (timerRef.current) clearInterval(timerRef.current); };
+    return () => { requestGeneration.current++; if (timerRef.current) clearInterval(timerRef.current); };
   }, [fetchData, network]);
 
   function handleSort(key: SortKey) {
@@ -366,10 +372,10 @@ function ValidatorsPageInner() {
       let diff = 0;
       switch (sortKey) {
         case 'score':   diff = a.score - b.score; break;
-        case 'pick':    diff = a.pick - b.pick; break;
+        case 'pick':    diff = (a.pick ?? -1) - (b.pick ?? -1); break;
         case 'rank':    diff = b.blocksProduced - a.blocksProduced; break; // original rank
         case 'health':  diff = HEALTH_ORDER[a.health] - HEALTH_ORDER[b.health]; break;
-        case 'uptime':  diff = a.participationPct - b.participationPct; break;
+        case 'uptime':  diff = (a.participationPct ?? -1) - (b.participationPct ?? -1); break;
         case 'blocks':  diff = a.blocksProduced - b.blocksProduced; break;
         case 'share':   diff = a.sharePct - b.sharePct; break;
         case 'txs':        diff = a.totalTxs - b.totalTxs; break;
@@ -394,7 +400,7 @@ function ValidatorsPageInner() {
   const timeSinceUpdate = lastUpdate ? Date.now() - lastUpdate.getTime() : Infinity;
   const liveState: 'live' | 'loading' | 'offline' =
     !data && loading ? 'loading' :
-    failCount >= 3 || timeSinceUpdate > 60_000 ? 'offline' :
+    failCount >= 3 || data?.stale || timeSinceUpdate > 60_000 ? 'offline' :
     'live';
 
   const RIGHT_ALIGN: SortKey[] = ['score', 'uptime', 'blocks', 'share', 'txs', 'stake', 'commission', 'age', 'apr'];
@@ -406,29 +412,6 @@ function ValidatorsPageInner() {
     color: sortKey === key ? 'var(--gold)' : 'var(--text-muted)',
     transition: 'color 0.15s',
   });
-
-  // On mainnet, the staking precompile is currently empty (Monad mainnet
-  // hasn't activated on-chain validator registration yet). The list-API
-  // returns 0 registered/active so the page would otherwise show the
-  // "warming" / "no validators" state forever — confusing. Show an
-  // explicit "coming soon" placeholder instead.
-  if (network === 'mainnet') {
-    return (
-      <>
-        <HexBg />
-        <div style={{ position: 'relative', zIndex: 1, minHeight: '100vh' }}>
-          <SiteHeader network={network} onNetworkChange={setNetwork} liveState="live" lastUpdate={null} />
-          <main className="site-main">
-            <TabNav />
-            <MainnetSoonCard
-              title="VALIDATORS"
-              description="Monad mainnet hasn't activated the staking precompile yet — `getValidator(id)` returns empty for all ids. As soon as on-chain validator registration goes live, this view will populate automatically (the underlying logic already supports mainnet)."
-            />
-          </main>
-        </div>
-      </>
-    );
-  }
 
   return (
     <>
@@ -809,7 +792,7 @@ function ValidatorsPageInner() {
                     {processed.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE).map((v, idx) => {
                       const i = (page - 1) * PAGE_SIZE + idx;   // absolute rank across pages
                       const hs = HEALTH_STYLE[v.health];
-                      const uptimeDisplay = Math.min(v.participationPct, 100);
+                      const uptimeDisplay = Math.min(v.participationPct ?? 0, 100);
                       const uptimeColor =
                         uptimeDisplay < 50 ? '#E05252' :
                         uptimeDisplay < 80 ? '#C9A84C' : '#4CAF6E';
@@ -899,9 +882,9 @@ function ValidatorsPageInner() {
                               ? <span style={{ color: v.commissionPct > 10 ? '#E8A020' : 'var(--text)' }}>{v.commissionPct.toFixed(0)}%</span>
                               : <span style={{ color: 'var(--text-muted)' }}>—</span>}
                           </td>
-                          {/* APR (delegator, net of commission) */}
+                          {/* Projected APR (delegator, net of commission) */}
                           <td style={{ textAlign: 'right', fontFamily: 'DM Mono, monospace', fontSize: 12, whiteSpace: 'nowrap' }}
-                              title={v.aprGross != null ? `Gross ${v.aprGross.toFixed(1)}% · Commission ${v.commissionPct ?? 0}%` : undefined}>
+                              title={v.aprGross != null ? `Projected gross ${v.aprGross.toFixed(1)}% · 18 MON/block · assumed 0.3s · Commission ${v.commissionPct ?? 0}%` : undefined}>
                             {v.aprDelegator != null
                               ? <span style={{ color: 'var(--gold)' }}>{v.aprDelegator.toFixed(1)}%</span>
                               : <span style={{ color: 'var(--text-muted)' }}>—</span>}
@@ -909,7 +892,7 @@ function ValidatorsPageInner() {
                           {/* Pick (delegator-only) */}
                           {view === 'delegator' && (
                             <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
-                              {v.pick > 0
+                              {v.pick != null && v.pick > 0
                                 ? <span style={{ fontFamily: 'Bebas Neue, sans-serif', fontSize: 16, color: 'var(--gold)', letterSpacing: '0.04em' }}>{v.pick.toFixed(1)}</span>
                                 : <span style={{ color: 'var(--text-muted)' }}>—</span>}
                             </td>
@@ -918,13 +901,13 @@ function ValidatorsPageInner() {
                           {view === 'operator' && (
                             <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
                               <span
-                                title={`Health ${v.health} · Uptime ${Math.min(v.participationPct, 100).toFixed(0)}%`}
+                                title={`Health ${v.health} · Participation ${v.participationPct == null ? 'unavailable' : `${Math.min(v.participationPct, 100).toFixed(0)}%`}`}
                                 style={{
                                   fontFamily: 'Bebas Neue, sans-serif', fontSize: 16,
                                   color: scColor, letterSpacing: '0.04em',
                                 }}
                               >
-                                {sc}
+                                {v.health === 'unknown' ? '—' : sc}
                               </span>
                             </td>
                           )}
@@ -949,26 +932,26 @@ function ValidatorsPageInner() {
                           {/* Uptime */}
                           <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
                             <span
-                              title={v.participationPct > 100 ? `raw ${v.participationPct.toFixed(0)}% (high stake)` : undefined}
+                              title={v.participationPct != null && v.participationPct > 100 ? `raw ${v.participationPct.toFixed(0)}% (high stake)` : undefined}
                               style={{ fontSize: 12, color: uptimeColor, fontFamily: 'DM Mono, monospace' }}
                             >
-                              {uptimeDisplay.toFixed(0)}%
+                              {v.participationPct == null ? '—' : `${uptimeDisplay.toFixed(0)}%`}
                             </span>
                           </td>
                           {/* Blocks (operator-only) */}
                           {view === 'operator' && (
                             <td style={{ textAlign: 'right', fontFamily: 'DM Mono, monospace', fontSize: 13, whiteSpace: 'nowrap' }}>
-                              {v.blocksProduced.toLocaleString('en-US')}
+                              {v.attributionComplete === false ? '—' : v.blocksProduced.toLocaleString('en-US')}
                             </td>
                           )}
                           {/* Share */}
                           <td style={{ textAlign: 'right', fontFamily: 'DM Mono, monospace', fontSize: 12, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
-                            {v.sharePct.toFixed(1)}%
+                            {v.attributionComplete === false ? '—' : `${v.sharePct.toFixed(1)}%`}
                           </td>
                           {/* Txs (operator-only) */}
                           {view === 'operator' && (
                             <td style={{ textAlign: 'right', fontFamily: 'DM Mono, monospace', fontSize: 13, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
-                              {v.totalTxs.toLocaleString('en-US')}
+                              {v.attributionComplete === false ? '—' : v.totalTxs.toLocaleString('en-US')}
                             </td>
                           )}
                           {/* Last Block (operator-only) */}

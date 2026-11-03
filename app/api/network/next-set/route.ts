@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { apiError } from '@/lib/apiError';
-import { ensureRegistryLoaded, getChainDataById, getConsensusIds } from '@/lib/validator-registry';
+import { ensureRegistryLoaded, getChainDataById, getConsensusIds, getRegistryStatus } from '@/lib/validator-registry';
 import { getValidatorInfo } from '@/lib/validator-monikers';
 import { NETWORKS, NetworkId } from '@/lib/networks';
+import { getEpochState } from '@/lib/epochState';
+import { getTipNumber } from '@/lib/tipCache';
 
 export const dynamic = 'force-dynamic';
 
@@ -25,23 +27,10 @@ interface SetMember {
   deltaPct: number;           // delta as % of snapshotStake
 }
 
-async function getLatestBlock(rpcUrl: string): Promise<number | null> {
-  try {
-    const res = await fetch(rpcUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_blockNumber', params: [] }),
-      signal: AbortSignal.timeout(5_000),
-    });
-    if (!res.ok) return null;
-    const j = await res.json() as { result?: string };
-    return j.result ? parseInt(j.result, 16) : null;
-  } catch { return null; }
-}
-
 export async function GET(req: NextRequest) {
   const rawNet = req.nextUrl.searchParams.get('network') ?? 'testnet';
-  const network: NetworkId = (rawNet === 'mainnet' ? 'mainnet' : 'testnet');
+  if (rawNet !== 'mainnet' && rawNet !== 'testnet') return NextResponse.json({ error: 'Invalid network' }, { status: 400 });
+  const network: NetworkId = rawNet;
 
   const cached = cache.get(network);
   if (cached && Date.now() - cached.ts < CACHE_TTL) {
@@ -54,6 +43,7 @@ export async function GET(req: NextRequest) {
       : NETWORKS[network].rpc;
     await ensureRegistryLoaded(rpcUrl, network);
 
+    const registryStatus = getRegistryStatus(network);
     const chainData = getChainDataById(network);
     const consensusIds = getConsensusIds(network);
 
@@ -118,8 +108,9 @@ export async function GET(req: NextRequest) {
     // otherwise list a fully-active validator (live + consensus stake intact) as
     // "leaving". A TRUE departure has snapshot 0 AND its live stake also ~0
     // (delegators pulled out); a freeze artifact has snapshot 0 but live stake>0.
-    const leaving = allRows
-      .filter(r => currentIds.has(r.validatorId) && !projectedIds.has(r.validatorId))
+    const potentialLeaving = allRows.filter(r => currentIds.has(r.validatorId) && !projectedIds.has(r.validatorId));
+    const uncertainLeaving = potentialLeaving.filter(r => r.snapshotStakeMon === 0 && r.activeStakeMon > 0);
+    const leaving = potentialLeaving
       .filter(r => !(r.snapshotStakeMon === 0 && r.activeStakeMon > 0))
       .sort((a, b) => b.snapshotStakeMon - a.snapshotStakeMon);
 
@@ -144,30 +135,23 @@ export async function GET(req: NextRequest) {
       .sort((a, b) => Math.abs(b.deltaMon) - Math.abs(a.deltaMon))
       .slice(0, 30);
 
-    // Epoch position — same math as /api/stats so the widget aligns.
     const blocksPerEpoch = NETWORKS[network].blocksPerEpoch;
-    const latestBlockNum = await getLatestBlock(rpcUrl);
-
-    const epochInfo = latestBlockNum
-      ? {
-          currentEpoch: Math.floor(latestBlockNum / blocksPerEpoch) + 1,
-          blockInEpoch: latestBlockNum % blocksPerEpoch,
-          blocksPerEpoch,
-          blocksUntilNext: blocksPerEpoch - (latestBlockNum % blocksPerEpoch),
-          progressPct: Math.round(((latestBlockNum % blocksPerEpoch) / blocksPerEpoch) * 1000) / 10,
-        }
-      : null;
-
-    // Lifecycle phase derivation. Snapshot happens at epoch boundary; pre-snapshot
-    // window flagged at ≥90% so operators see a "freeze" zone. Post-rotation
-    // window is the first 5% of a new epoch when the new set just took over.
-    const phase = (() => {
-      if (!epochInfo) return 'unknown' as const;
-      const p = epochInfo.progressPct;
-      if (p < 5)  return 'post-rotation' as const;
-      if (p < 90) return 'active' as const;
-      return 'pre-snapshot' as const;
-    })();
+    const [tipResult, epochState] = await Promise.all([
+      getTipNumber(network).catch(() => null), getEpochState(network),
+    ]);
+    const epochInfo = epochState.current != null ? {
+      currentEpoch: epochState.current,
+      inEpochDelayPeriod: epochState.inEpochDelayPeriod,
+      source: epochState.source,
+      blockInEpoch: tipResult != null ? tipResult % blocksPerEpoch : null,
+      blocksPerEpoch,
+      blocksUntilNext: tipResult != null ? blocksPerEpoch - (tipResult % blocksPerEpoch) : null,
+      progressPct: tipResult != null ? Math.round(((tipResult % blocksPerEpoch) / blocksPerEpoch) * 1000) / 10 : null,
+      estimateOnly: true,
+    } : null;
+    // Do not infer consensus phase from modular block-height arithmetic.
+    const phase = epochState.inEpochDelayPeriod === true ? 'epoch-delay'
+      : epochState.inEpochDelayPeriod === false ? 'active' : 'unknown';
 
     const data = {
       network,
@@ -178,6 +162,12 @@ export async function GET(req: NextRequest) {
       projectedSetSize: projectedNextSet.length,
       joining,
       leaving,
+      uncertainLeaving,
+      registryFetchedAt: registryStatus.fetchedAt,
+      registryStale: registryStatus.stale,
+      dataAsOf: registryStatus.fetchedAt,
+      projectionComplete: registryStatus.complete && !registryStatus.stale && uncertainLeaving.length === 0 && allRows.filter(r => currentIds.has(r.validatorId)).length === currentSetSize,
+      projectionNote: 'Estimate from stake snapshots; excluded rotation artifacts are not confirmed departures.',
       movers,
       thresholds: {
         moveMon: STAKE_MOVE_THRESHOLD_MON,

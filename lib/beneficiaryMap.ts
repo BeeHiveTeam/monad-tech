@@ -13,7 +13,7 @@
  *
  * Mechanism:
  *   1. Foundation auto-delegator calls staking precompile every block to
- *      award 25 MON to the block's leader. This emits:
+ *      award the protocol block reward to the block's leader. This emits:
  *          ValidatorRewarded(uint64 indexed validatorId, address indexed from,
  *                            uint256 amount, uint64 epoch)
  *      Topic0 = keccak256("ValidatorRewarded(uint64,address,uint256,uint64)")
@@ -28,6 +28,7 @@
  */
 
 import { MONAD_RPC_URL } from './config';
+import { NETWORKS, type NetworkId } from './networks';
 
 const STAKING_PRECOMPILE = '0x0000000000000000000000000000000000001000';
 const TOPIC0_VALIDATOR_REWARDED =
@@ -38,22 +39,27 @@ const CHUNK_SIZE = 1000;               // RPC eth_getLogs window per request
 interface BenefState {
   // blockNumber → validatorId rewarded for that block
   blockToValidator: Map<number, number>;
+  ambiguousBlocks: Set<number>;
   // validatorId → set of beneficiary (block.miner) addresses observed
   validatorToBenef: Map<number, Set<string>>;
   highestBlockSeen: number;
   lastUpdatedAt: number;
 }
 
-const g = globalThis as unknown as { __monadBenefState__?: BenefState };
-if (!g.__monadBenefState__) {
-  g.__monadBenefState__ = {
-    blockToValidator: new Map(),
-    validatorToBenef: new Map(),
-    highestBlockSeen: 0,
-    lastUpdatedAt: 0,
-  };
+// Never reuse a testnet block number or validator ID on mainnet.
+const g = globalThis as unknown as { __monadBenefByNetwork__?: Map<NetworkId, BenefState> };
+const states = g.__monadBenefByNetwork__ ??= new Map();
+function state(network: NetworkId): BenefState {
+  let s = states.get(network);
+  if (!s) {
+    s = { blockToValidator: new Map(), ambiguousBlocks: new Set(), validatorToBenef: new Map(), highestBlockSeen: 0, lastUpdatedAt: 0 };
+    states.set(network, s);
+  }
+  return s;
 }
-const S = g.__monadBenefState__!;
+function rpcFor(network: NetworkId): string {
+  return network === 'testnet' ? MONAD_RPC_URL : NETWORKS[network].rpc;
+}
 
 interface RpcLog {
   blockNumber: string;
@@ -64,7 +70,7 @@ interface RpcLog {
 // them apart. Collapsing both to [] meant a failed chunk looked like an empty one, the watermark
 // advanced past it, and those blocks were never scanned again: permanent holes in the
 // beneficiary map, silently.
-async function fetchLogChunk(fromBlock: number, toBlock: number): Promise<RpcLog[] | null> {
+async function fetchLogChunk(fromBlock: number, toBlock: number, network: NetworkId): Promise<RpcLog[] | null> {
   const body = JSON.stringify({
     jsonrpc: '2.0', id: 1, method: 'eth_getLogs',
     params: [{
@@ -74,7 +80,7 @@ async function fetchLogChunk(fromBlock: number, toBlock: number): Promise<RpcLog
       toBlock: '0x' + toBlock.toString(16),
     }],
   });
-  const res = await fetch(MONAD_RPC_URL, {
+  const res = await fetch(rpcFor(network), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body,
@@ -86,9 +92,9 @@ async function fetchLogChunk(fromBlock: number, toBlock: number): Promise<RpcLog
   return j.result ?? [];
 }
 
-async function getLatestBlock(): Promise<number | null> {
+async function getLatestBlock(network: NetworkId): Promise<number | null> {
   try {
-    const res = await fetch(MONAD_RPC_URL, {
+    const res = await fetch(rpcFor(network), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_blockNumber', params: [] }),
@@ -108,14 +114,15 @@ async function getLatestBlock(): Promise<number | null> {
  * Drops entries older than SCAN_RANGE_BLOCKS to keep memory bounded — the
  * map is only useful for blocks in the current sample window anyway.
  */
-export async function tickBeneficiaryScanner(): Promise<void> {
-  const tip = await getLatestBlock();
+async function scanNetwork(network: NetworkId): Promise<void> {
+  const S = state(network);
+  const tip = await getLatestBlock(network);
   if (tip === null) return;
 
   // Determine the from..to range to scan.
   const fromBlock = S.highestBlockSeen > 0
     ? Math.max(S.highestBlockSeen + 1, tip - SCAN_RANGE_BLOCKS)
-    : tip - SCAN_RANGE_BLOCKS;
+    : Math.max(0, tip - SCAN_RANGE_BLOCKS);
   const toBlock = tip;
   if (fromBlock > toBlock) return;
 
@@ -126,7 +133,7 @@ export async function tickBeneficiaryScanner(): Promise<void> {
   let failedAt: number | null = null;
   for (let from = fromBlock; from <= toBlock; from += CHUNK_SIZE) {
     const to = Math.min(from + CHUNK_SIZE - 1, toBlock);
-    const logs = await fetchLogChunk(from, to);
+    const logs = await fetchLogChunk(from, to, network);
     if (logs === null) {
       failedAt = from;
       break;
@@ -134,7 +141,15 @@ export async function tickBeneficiaryScanner(): Promise<void> {
     for (const log of logs) {
       const blockNum = parseInt(log.blockNumber, 16);
       const validatorId = parseInt(log.topics[1], 16);
-      if (!S.blockToValidator.has(blockNum)) {
+      if (!Number.isFinite(blockNum) || !Number.isFinite(validatorId)) continue;
+      // External rewards can also emit this event. Conflicting rewarded IDs
+      // in one block are not reliable evidence of the proposer.
+      const previous = S.blockToValidator.get(blockNum);
+      if (S.ambiguousBlocks.has(blockNum)) continue;
+      if (previous != null && previous !== validatorId) {
+        S.blockToValidator.delete(blockNum);
+        S.ambiguousBlocks.add(blockNum);
+      } else {
         S.blockToValidator.set(blockNum, validatorId);
       }
     }
@@ -152,21 +167,23 @@ export async function tickBeneficiaryScanner(): Promise<void> {
     if (bn < dropBefore) S.blockToValidator.delete(bn);
   }
 
+  for (const bn of S.ambiguousBlocks) if (bn < dropBefore) S.ambiguousBlocks.delete(bn);
   S.lastUpdatedAt = Date.now();
 }
 
 /** Returns the validatorId that produced a given block, or null if unknown. */
-export function getValidatorIdForBlock(blockNumber: number): number | null {
-  return S.blockToValidator.get(blockNumber) ?? null;
+export function getValidatorIdForBlock(blockNumber: number, network: NetworkId = 'testnet'): number | null {
+  return state(network).blockToValidator.get(blockNumber) ?? null;
 }
 
 /** Diagnostic — returns scanner state for /api/ws-state or similar surfaces. */
-export function getBeneficiaryMapState(): {
+export function getBeneficiaryMapState(network: NetworkId = 'testnet'): {
   size: number;
   highestBlock: number;
   lastUpdatedAt: number;
   ageMs: number;
 } {
+  const S = state(network);
   return {
     size: S.blockToValidator.size,
     highestBlock: S.highestBlockSeen,
@@ -180,16 +197,27 @@ export function getBeneficiaryMapState(): {
  * sees `block.miner = X` for a block whose validatorId we know. Lets us
  * expose `beneficiary` field per validator without an extra fetch.
  */
-export function recordBeneficiary(validatorId: number, beneficiary: string): void {
+export function recordBeneficiary(validatorId: number, beneficiary: string, network: NetworkId = 'testnet'): void {
+  const S = state(network);
   let set = S.validatorToBenef.get(validatorId);
   if (!set) { set = new Set(); S.validatorToBenef.set(validatorId, set); }
   set.add(beneficiary.toLowerCase());
 }
 
 /** Returns the (canonical / most-recent) beneficiary for a validator. */
-export function getBeneficiaryForValidator(validatorId: number): string | null {
-  const set = S.validatorToBenef.get(validatorId);
+export function getBeneficiaryForValidator(validatorId: number, network: NetworkId = 'testnet'): string | null {
+  const set = state(network).validatorToBenef.get(validatorId);
   if (!set || set.size === 0) return null;
   // Just return any — operators rarely change beneficiary
   return set.values().next().value ?? null;
+}
+
+
+const scansInFlight = new Map<NetworkId, Promise<void>>();
+export function tickBeneficiaryScanner(network: NetworkId = 'testnet'): Promise<void> {
+  const existing = scansInFlight.get(network);
+  if (existing) return existing;
+  const task = scanNetwork(network).finally(() => { scansInFlight.delete(network); });
+  scansInFlight.set(network, task);
+  return task;
 }

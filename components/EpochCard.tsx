@@ -1,14 +1,15 @@
 interface Props {
-  current: number;
+  current: number | null;
   blockInEpoch: number;
   blocksPerEpoch: number;
   blocksUntilNext: number;
-  secondsUntilNext: number;
+  secondsUntilNext: number | null;
+  inEpochDelayPeriod?: boolean | null;
   progressPct: number;
 }
 
-function fmtDuration(sec: number): string {
-  if (sec <= 0) return '—';
+function fmtDuration(sec: number | null): string {
+  if (sec == null || sec <= 0) return '—';
   const h = Math.floor(sec / 3600);
   const m = Math.floor((sec % 3600) / 60);
   const s = sec % 60;
@@ -17,7 +18,7 @@ function fmtDuration(sec: number): string {
   return `${s}s`;
 }
 
-export default function EpochCard({ current, blockInEpoch, blocksPerEpoch, blocksUntilNext, secondsUntilNext, progressPct }: Props) {
+export default function EpochCard({ current, blockInEpoch, blocksPerEpoch, blocksUntilNext, secondsUntilNext, progressPct, inEpochDelayPeriod }: Props) {
   return (
     <div className="card" style={{ padding: '20px 24px' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 14 }}>
@@ -33,7 +34,7 @@ export default function EpochCard({ current, blockInEpoch, blocksPerEpoch, block
             fontSize: 32, letterSpacing: '0.06em',
             color: 'var(--gold)', lineHeight: 1,
           }}>
-            #{current.toLocaleString('en-US')}
+            {current != null ? `#${current.toLocaleString('en-US')}` : 'Unavailable'}
           </div>
         </div>
         <div style={{ textAlign: 'right' }}>
@@ -41,17 +42,17 @@ export default function EpochCard({ current, blockInEpoch, blocksPerEpoch, block
             fontSize: 11, letterSpacing: '0.1em', textTransform: 'uppercase',
             color: 'var(--text-muted)', marginBottom: 6,
           }}>
-            Next Epoch In
+            {inEpochDelayPeriod ? 'Epoch transition pending' : 'Next boundary ≈'}
           </div>
           <div style={{
             fontFamily: 'Bebas Neue, sans-serif',
             fontSize: 24, letterSpacing: '0.06em',
             color: 'var(--text)', lineHeight: 1,
           }}>
-            {fmtDuration(secondsUntilNext)}
+            {inEpochDelayPeriod ? 'Delay period' : fmtDuration(secondsUntilNext)}
           </div>
           <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4, fontFamily: 'DM Mono, monospace' }}>
-            {blocksUntilNext.toLocaleString('en-US')} blocks
+            {inEpochDelayPeriod ? 'Waiting for consensus rounds' : `${blocksUntilNext.toLocaleString('en-US')} blocks (estimate)`}
           </div>
         </div>
       </div>
@@ -73,7 +74,7 @@ export default function EpochCard({ current, blockInEpoch, blocksPerEpoch, block
         display: 'flex', justifyContent: 'space-between',
         fontSize: 11, color: 'var(--text-muted)', fontFamily: 'DM Mono, monospace',
       }}>
-        <span>{blockInEpoch.toLocaleString('en-US')} / {blocksPerEpoch.toLocaleString('en-US')}</span>
+        <span title="Block-boundary position is approximate, not exact epoch progress.">{blockInEpoch.toLocaleString('en-US')} / {blocksPerEpoch.toLocaleString('en-US')}</span>
         <span>{progressPct.toFixed(1)}%</span>
       </div>
     </div>

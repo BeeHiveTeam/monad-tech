@@ -203,6 +203,15 @@ interface RpcTx {
   value: string; gasPrice?: string; effectiveGasPrice?: string;
   blockNumber: string;
 }
+/** Preserve unavailable RPC data as null; an actual empty transaction array is measured zero. */
+export function transactionsFromRpcResult(response: unknown): RpcTx[] | null {
+  if (!response || typeof response !== 'object') return null;
+  const value = response as { error?: unknown; result?: { transactions?: unknown } | null };
+  if (value.error || !value.result || !Array.isArray(value.result.transactions)) return null;
+  if (!value.result.transactions.every(t => t && typeof t === 'object' && typeof t.hash === 'string')) return null;
+  return value.result.transactions as RpcTx[];
+}
+
 async function enrichBlock(num: number): Promise<void> {
   try {
     const res = await fetch(HTTP_RPC, {
@@ -220,8 +229,8 @@ async function enrichBlock(num: number): Promise<void> {
       S.enrichErrors++;
       return;
     }
-    const j = await res.json() as { result?: { transactions?: RpcTx[] } };
-    const rawTxs = j.result?.transactions ?? [];
+    const rawTxs = transactionsFromRpcResult(await res.json());
+    if (rawTxs === null) { S.enrichErrors++; return; }
     const block = S.ring.get(num);
     if (!block) return; // evicted while we were fetching
     block.txCount = rawTxs.length;

@@ -21,6 +21,12 @@ interface Resp {
   positionCount: number;
   totalStakeMon: number;
   validatorsScanned: number;
+  validatorsTotal: number;
+  validatorsFailed: number;
+  complete: boolean;
+  partial: boolean;
+  registryStale?: boolean;
+  message?: string;
   positions: Position[];
   fetchedAt: number;
   building?: boolean;
@@ -39,25 +45,75 @@ export default function MyDelegationsPage() {
   const [network, setNetwork] = useNetwork();
   const [input, setInput] = useState('');
   const [submitted, setSubmitted] = useState('');
+  const [scanNumber, setScanNumber] = useState(0);
+  const [building, setBuilding] = useState(false);
+  const [now, setNow] = useState(() => Date.now());
   const [data, setData] = useState<Resp | null>(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 15_000);
+    return () => clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
     if (!submitted) return;
     const ctrl = new AbortController();
+    let cancelled = false;
+    let retry: ReturnType<typeof setTimeout> | undefined;
+    setData(null);
     setLoading(true);
+    setBuilding(false);
     setErr(null);
-    fetch(`/api/my-delegations?address=${submitted}&network=${network}`, { signal: ctrl.signal })
-      .then(r => r.json())
-      .then((d: Resp) => {
-        if (d.error) setErr(d.error);
-        else setData(d);
+    const load = async () => {
+      try {
+        const response = await fetch(`/api/my-delegations?address=${submitted}&network=${network}`, {
+          signal: ctrl.signal, cache: 'no-store',
+        });
+        const result: Resp = await response.json();
+        if (cancelled) return;
+        if (result.error || !response.ok) {
+          setErr(result.error || 'Unable to verify delegations. Please retry.');
+          setLoading(false);
+          setBuilding(false);
+          return;
+        }
+        if (result.network !== network || result.address?.toLowerCase() !== submitted) {
+          throw new Error('The scan returned a different wallet or network. Please retry.');
+        }
+        if (result.building) {
+          setBuilding(true);
+          setLoading(true);
+          retry = setTimeout(load, 5_000);
+          return;
+        }
+        setData(result);
+        setNow(Date.now());
+        setBuilding(false);
         setLoading(false);
-      })
-      .catch(e => { if (e?.name !== 'AbortError') { setErr(String(e)); setLoading(false); } });
-    return () => ctrl.abort();
-  }, [submitted, network]);
+      } catch (error) {
+        if (!cancelled && !ctrl.signal.aborted) {
+          setErr(error instanceof Error ? error.message : 'Unable to verify delegations. Please retry.');
+          setLoading(false);
+          setBuilding(false);
+        }
+      }
+    };
+    void load();
+    return () => {
+      cancelled = true;
+      ctrl.abort();
+      if (retry) clearTimeout(retry);
+    };
+  }, [submitted, network, scanNumber]);
+
+  // Do not flash the previous wallet/network's result before the effect runs.
+  const resultMatches = data?.network === network && data.address.toLowerCase() === submitted;
+  const visibleData = resultMatches ? data : null;
+  const stale = !!visibleData && (!Number.isFinite(visibleData.fetchedAt) || now - visibleData.fetchedAt > 60_000);
+  const liveState = loading ? 'loading'
+    : err || building || !visibleData?.complete || visibleData.partial || stale ? 'offline' : 'live';
 
   const onSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -69,13 +125,16 @@ export default function MyDelegationsPage() {
     setErr(null);
     setData(null);
     setSubmitted(v);
+    setScanNumber(n => n + 1);
+    setLoading(true);
+    setBuilding(false);
   };
 
   return (
     <>
       <HexBg />
       <div style={{ position: 'relative', zIndex: 1, minHeight: '100vh' }}>
-        <SiteHeader network={network} onNetworkChange={setNetwork} liveState={loading ? 'loading' : 'live'} lastUpdate={null} />
+        <SiteHeader network={network} onNetworkChange={setNetwork} liveState={liveState} lastUpdate={visibleData ? new Date(visibleData.fetchedAt) : null} />
         <main className="site-main">
           <TabNav />
 
@@ -144,37 +203,50 @@ export default function MyDelegationsPage() {
           )}
 
           {err && (
-            <div className="card" style={{ padding: '12px 16px', marginBottom: 16, color: '#E05252', fontSize: 12 }}>
+            <div role="alert" className="card" style={{ padding: '12px 16px', marginBottom: 16, color: '#E05252', fontSize: 12 }}>
               {err}
             </div>
           )}
 
           {loading && (
             <div className="card" style={{ padding: 40, textAlign: 'center', color: 'var(--text-muted)', fontSize: 12 }}>
-              Scanning every validator ID in the registry — may take 5-10 seconds.
+              {building ? 'Validator registry is loading. Retrying automatically…' : 'Verifying balances across the validator registry…'}
             </div>
           )}
 
-          {data && !loading && (
+          {visibleData && !loading && !err && (
             <>
+              {(!visibleData.complete || visibleData.partial) && (
+                <div className="card" role="status" style={{ padding: '12px 16px', marginBottom: 16, color: '#E8A020', fontSize: 12 }}>
+                  Partial scan: verified {visibleData.validatorsScanned} of {visibleData.validatorsTotal} known validator IDs.
+                  {' '}{visibleData.validatorsFailed} balance reads failed or were not completed.
+                  {visibleData.registryStale && ' Validator registry data is stale.'}
+                  {' '}Balances below are confirmed observations, not your complete portfolio. Retry the scan.
+                </div>
+              )}
+              {stale && (
+                <div className="card" role="status" style={{ padding: '12px 16px', marginBottom: 16, color: '#E8A020', fontSize: 12 }}>
+                  This scan is over a minute old. Scan again to refresh balances.
+                </div>
+              )}
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12, marginBottom: 16 }}>
                 <div className="card" style={{ padding: 16 }}>
                   <div style={{ fontSize: 10, color: 'var(--text-muted)', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 6 }}>Positions</div>
-                  <div style={{ fontFamily: 'Bebas Neue, sans-serif', fontSize: 26, color: 'var(--gold)' }}>{data.positionCount}</div>
+                  <div style={{ fontFamily: 'Bebas Neue, sans-serif', fontSize: 26, color: 'var(--gold)' }}>{visibleData.positionCount}</div>
                 </div>
                 <div className="card" style={{ padding: 16 }}>
-                  <div style={{ fontSize: 10, color: 'var(--text-muted)', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 6 }}>Total Delegated</div>
-                  <div style={{ fontFamily: 'Bebas Neue, sans-serif', fontSize: 26, color: 'var(--gold)' }}>{fmt(data.totalStakeMon)} MON</div>
+                  <div style={{ fontSize: 10, color: 'var(--text-muted)', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 6 }}>{visibleData.complete ? 'Total Delegated' : 'Verified Delegated (partial)'}</div>
+                  <div style={{ fontFamily: 'Bebas Neue, sans-serif', fontSize: 26, color: 'var(--gold)' }}>{fmt(visibleData.totalStakeMon)} MON</div>
                 </div>
                 <div className="card" style={{ padding: 16 }}>
                   <div style={{ fontSize: 10, color: 'var(--text-muted)', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 6 }}>Validators scanned</div>
-                  <div style={{ fontFamily: 'Bebas Neue, sans-serif', fontSize: 26, color: 'var(--text)' }}>{data.validatorsScanned}</div>
+                  <div style={{ fontFamily: 'Bebas Neue, sans-serif', fontSize: 26, color: 'var(--text)' }}>{visibleData.validatorsScanned} / {visibleData.validatorsTotal}</div>
                 </div>
               </div>
 
-              {data.positions.length === 0 ? (
+              {visibleData.positions.length === 0 ? (
                 <div className="card" style={{ padding: 40, textAlign: 'center', color: 'var(--text-muted)' }}>
-                  No delegations found for <span style={{ fontFamily: 'DM Mono, monospace', color: 'var(--text)' }}>{data.address}</span> across all {data.validatorsScanned} validator IDs in the active registry.
+                  {visibleData.complete ? 'No delegations found for ' : 'No non-zero delegations verified for '}<span style={{ fontFamily: 'DM Mono, monospace', color: 'var(--text)' }}>{visibleData.address}</span> across {visibleData.validatorsScanned} successfully checked validator IDs{visibleData.complete ? ' in the registry.' : '. The scan is incomplete; other positions may exist.'}
                 </div>
               ) : (
                 <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
@@ -184,14 +256,14 @@ export default function MyDelegationsPage() {
                         <th style={{ padding: '10px 12px', textAlign: 'left', color: 'var(--text-muted)', fontSize: 10, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Validator</th>
                         <th style={{ padding: '10px 12px', textAlign: 'left', color: 'var(--text-muted)', fontSize: 10, letterSpacing: '0.06em', textTransform: 'uppercase' }}>VID</th>
                         <th style={{ padding: '10px 12px', textAlign: 'right', color: 'var(--text-muted)', fontSize: 10, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Your Stake</th>
-                        <th style={{ padding: '10px 12px', textAlign: 'right', color: 'var(--text-muted)', fontSize: 10, letterSpacing: '0.06em', textTransform: 'uppercase' }}>% of Total</th>
+                        <th style={{ padding: '10px 12px', textAlign: 'right', color: 'var(--text-muted)', fontSize: 10, letterSpacing: '0.06em', textTransform: 'uppercase' }}>{visibleData.complete ? '% of Total' : '% of Verified'}</th>
                         <th style={{ padding: '10px 12px', textAlign: 'right', color: 'var(--text-muted)', fontSize: 10, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Commission</th>
                         <th style={{ padding: '10px 12px', textAlign: 'right', color: 'var(--text-muted)', fontSize: 10, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Status</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {data.positions.map(p => {
-                        const pct = data.totalStakeMon > 0 ? (p.stakeMon / data.totalStakeMon) * 100 : 0;
+                      {visibleData.positions.map(p => {
+                        const pct = visibleData.totalStakeMon > 0 ? (p.stakeMon / visibleData.totalStakeMon) * 100 : 0;
                         return (
                           <tr key={p.validatorId} style={{ borderTop: '1px solid var(--border)' }}>
                             <td style={{ padding: '8px 12px' }}>
@@ -223,7 +295,7 @@ export default function MyDelegationsPage() {
               <div className="card" style={{ padding: '14px 18px', marginTop: 16, fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.6 }}>
                 Stake values are read live from the Monad staking precompile (`getDelegator(validatorId, address)`). No reward-claim history here yet — coming in a later release.
                 See <Link href="/delegate" style={{ color: 'var(--gold-dim)' }}>Delegate</Link> for picking a new validator,
-                or <Link href={`/validators/${data.address}`} style={{ color: 'var(--gold-dim)' }}>your wallet&apos;s validator page</Link> if this address is also an operator auth.
+                or <Link href={`/validators/${visibleData.address}`} style={{ color: 'var(--gold-dim)' }}>your wallet&apos;s validator page</Link> if this address is also an operator auth.
               </div>
             </>
           )}

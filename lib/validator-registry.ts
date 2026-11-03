@@ -39,6 +39,28 @@ function githubApiUrl(network: NetworkId): string {
 // state so a mainnet load doesn't reset the testnet TTL clock.
 import type { NetworkId } from './networks';
 const _lastFetch: Map<NetworkId, number> = new Map();
+const _inflight = new Map<NetworkId, Promise<void>>();
+interface RegistryStatus {
+  complete: boolean;
+  stale: boolean;
+  fetchedAt: number | null;
+  error: string | null;
+}
+const _snapshotStatus = new Map<NetworkId, { fetchedAt: number; error: string | null }>();
+const _refreshErrors = new Map<NetworkId, string>();
+
+/** Distinguishes a completed empty chain snapshot from an unavailable registry. */
+export function getRegistryStatus(network: NetworkId = 'testnet'): RegistryStatus {
+  const snapshot = _snapshotStatus.get(network);
+  const error = _refreshErrors.get(network) ?? snapshot?.error ?? null;
+  return {
+    complete: !!snapshot,
+    stale: !snapshot || !!error || Date.now() - snapshot.fetchedAt >= REGISTRY_TTL_MS,
+    fetchedAt: snapshot?.fetchedAt ?? null,
+    error,
+  };
+}
+
 const REGISTRY_TTL_MS = 60 * 60_000; // 1 hour
 // Backoff after a failed/empty load. Long enough that a GitHub rate-limit window (60 req/hour)
 // can drain, short enough that a transient blip does not leave `validator-N` placeholders up
@@ -293,8 +315,16 @@ async function enumerateOnChain(rpcUrl: string, maxProbeId = 500): Promise<{ map
         signal: AbortSignal.timeout(30_000),
       });
       if (!res.ok) { anyBatchFailed = true; continue; }
-      const items = await res.json() as Array<{ id: number; result?: string }>;
+      const items = await res.json() as Array<{ id: number; result?: string; error?: { message?: string } }>;
+      if (!Array.isArray(items)) { anyBatchFailed = true; continue; }
+      const returnedIds = new Set(items.map(item => item.id));
+      if (requests.some(request => !returnedIds.has(request.id))) anyBatchFailed = true;
       for (const it of items) {
+        // Unsupported staking methods/unknown IDs may be legitimate empty results;
+        // rate-limit and transient JSON-RPC errors must not erase existing validators.
+        if (it.error && /rate|limit|timeout|temporar|internal|unavailable/i.test(it.error.message ?? '')) {
+          anyBatchFailed = true;
+        }
         const data = decodeValidatorResult(it.result ?? '');
         if (!data) continue;
         if (data.authAddress === '0x0000000000000000000000000000000000000000') continue;
@@ -307,40 +337,59 @@ async function enumerateOnChain(rpcUrl: string, maxProbeId = 500): Promise<{ map
   return { map: result, anyBatchFailed };
 }
 
-export async function ensureRegistryLoaded(rpcUrl: string, network: NetworkId = 'testnet'): Promise<void> {
+export function ensureRegistryLoaded(rpcUrl: string, network: NetworkId = 'testnet'): Promise<void> {
+  const pending = _inflight.get(network);
+  if (pending) return pending;
   const last = _lastFetch.get(network) ?? 0;
-  if (Date.now() - last < REGISTRY_TTL_MS) return;
-  _lastFetch.set(network, Date.now());
+  if (Date.now() - last < REGISTRY_TTL_MS) return Promise.resolve();
 
+  const task = refreshRegistry(rpcUrl, network).finally(() => {
+    if (_inflight.get(network) === task) _inflight.delete(network);
+  });
+  _inflight.set(network, task);
+  return task;
+}
+
+async function refreshRegistry(rpcUrl: string, network: NetworkId): Promise<void> {
+  _lastFetch.set(network, Date.now());
   try {
-    // Primary sources, run in parallel:
-    //   1. enumerateOnChain — read each validator's stake/commission/auth via
-    //      getValidator(id) for IDs 1..maxProbeId. Captures all known validators.
-    //   2. fetchConsensusSet — call getConsensusValidatorSet, the CANONICAL
-    //      active-set source per Monad docs (top-200 staked, paginated). Earlier
-    //      we approximated active set with `stakeMon >= 10M` which can drift
-    //      from canonical by a few validators (cap, ties, snapshot freshness).
-    //   3. GitHub monikers — metadata overlay keyed by validator ID.
+    let consensusFailed = false;
+    let githubFailed = false;
     const [chainResult, consensusIds, github] = await Promise.all([
       enumerateOnChain(rpcUrl, 800),
       fetchConsensusSet(rpcUrl).catch(err => {
-        console.error('[registry] getConsensusValidatorSet failed, falling back to stake threshold:', err);
-        return new Set<number>();
+        consensusFailed = true;
+        console.error(`[registry] [${network}] Consensus refresh failed; preserving previous set:`, err);
+        return getConsensusIds(network);
       }),
-      fetchGithubValidators(network).catch(() => [] as GithubValidatorInfo[]),
+      fetchGithubValidators(network).catch(() => {
+        githubFailed = true;
+        return [] as GithubValidatorInfo[];
+      }),
     ]);
-    _consensusIdsMap.set(network, consensusIds);
-    _consensusFetchedAtMap.set(network, Date.now());
-    const chainMap = chainResult.map;
-    _chainByIdMap.set(network, chainMap);
-    const githubById = new Map<number, GithubValidatorInfo>();
-    for (const g of github) githubById.set(g.id, g);
 
+    // A healthy populated consensus set must not disappear because a provider
+    // starts returning an empty/unsupported payload instead of a JSON-RPC error.
+    if (consensusIds.size === 0 && getConsensusIds(network).size > 0) {
+      consensusFailed = true;
+    }
+
+    // A partial scan is not a new registry snapshot. Keep the last good chain
+    // and metadata together; otherwise one failed batch can silently remove
+    // validators and corrupt stake totals, participation, and delegator views.
+    if (chainResult.anyBatchFailed) throw new Error('Incomplete validator scan');
+    const chainMap = chainResult.map;
+    if (chainMap.size === 0 && getChainDataById(network).size > 0) {
+      throw new Error('Empty validator scan would replace a non-empty snapshot');
+    }
+    const previous = new Map(getRegistrySnapshot(network).map(entry => [entry.id, entry]));
+    const githubById = new Map(github.map(entry => [entry.id, entry]));
     const entries = Array.from(chainMap.entries()).map(([id, chain]) => {
-      const g = githubById.get(id);
+      // Keep known metadata when GitHub is unavailable or returns a partial list.
+      const g = githubById.get(id) ?? previous.get(id);
       return {
         id,
-        name: g?.name ?? `validator-${id}`,   // fallback when GitHub has no moniker
+        name: g?.name ?? `validator-${id}`,
         authAddress: chain.authAddress.toLowerCase(),
         secp: g?.secp ?? '',
         website: g?.website,
@@ -352,52 +401,27 @@ export async function ensureRegistryLoaded(rpcUrl: string, network: NetworkId = 
       };
     });
 
+    _chainByIdMap.set(network, chainMap);
+    if (!consensusFailed) {
+      _consensusIdsMap.set(network, consensusIds);
+      _consensusFetchedAtMap.set(network, Date.now());
+    }
     loadRegistry(entries, network);
-    // eslint-disable-next-line no-console
+    _refreshErrors.delete(network);
+    _snapshotStatus.set(network, {
+      fetchedAt: Date.now(),
+      error: consensusFailed || githubFailed || (github.length === 0 && entries.length > 0)
+        ? 'Registry metadata or consensus refresh is incomplete.' : null,
+    });
     console.log(`[registry] [${network}] Loaded ${entries.length} validators on-chain (${github.length} with GitHub metadata, ${consensusIds.size} in canonical consensus set)`);
 
-    // Bug fix 2026-05-20: when GitHub metadata fetch fails entirely (returns 0
-    // entries) but on-chain data succeeds, _lastFetch was still set to "now",
-    // locking placeholder `validator-N` monikers for the full 1-hour TTL.
-    // Clear _lastFetch so the next caller re-tries the GitHub fetch and gives
-    // real monikers a chance to populate.
-    // Retry sooner when something actually FAILED — not merely when the result is empty.
-    // Two distinct situations were being conflated:
-    //   - RPC batches failed (errors are swallowed per batch, so enumerateOnChain returns an
-    //     empty map WITHOUT throwing, and the outer catch never fires). The old condition
-    //     required entries.length > 0, so this case fell through every branch and an empty
-    //     registry was served for the full hour, even after the RPC recovered.
-    //   - The chain legitimately has no validators — mainnet's staking precompile answers
-    //     `method not supported` today. That is an ANSWER, and re-asking it every five minutes
-    //     would mean 800 eth_call plus three GitHub requests on repeat, forever.
-    if (chainResult.anyBatchFailed || (github.length === 0 && entries.length > 0)) {
-      // Retry sooner than the 1-hour TTL, but do NOT clear it outright. Clearing meant the
-      // next caller re-ran the whole load — 800 eth_call in 32 batches, ~26 s of continuous
-      // RPC, plus 3 more unauthenticated GitHub requests that re-arm the 60/hour limit. Once
-      // GitHub starts answering 403 every request re-triggers that, and it never recovers on
-      // its own: a self-sustaining hammer against rpc.monad.xyz (documented limit 25 rps).
-      // Backdating the stamp gives a bounded retry window instead of an unbounded loop.
+    if (consensusFailed || githubFailed || (github.length === 0 && entries.length > 0)) {
       _lastFetch.set(network, Date.now() - REGISTRY_TTL_MS + REGISTRY_RETRY_MS);
-      const _why = chainResult.anyBatchFailed ? 'on-chain enumeration had failing batches' : 'GitHub metadata returned 0 entries';
-      console.warn(`[registry] [${network}] ${_why}; retrying in ${REGISTRY_RETRY_MS / 60_000} min (TTL kept)`);
+      console.warn(`[registry] [${network}] Incomplete metadata/consensus refresh; retry in ${REGISTRY_RETRY_MS / 60_000} min`);
     }
   } catch (e) {
-    // Same reasoning as above: a hard failure must not licence an immediate full retry.
+    _refreshErrors.set(network, 'Registry refresh failed; the last complete snapshot is retained.');
     _lastFetch.set(network, Date.now() - REGISTRY_TTL_MS + REGISTRY_RETRY_MS);
-    console.error(`[registry] [${network}] Failed to load (retry in ${REGISTRY_RETRY_MS / 60_000} min):`, e);
-  }
-}
-
-/**
- * Admin-only TTL invalidation. Use when GitHub metadata is stuck stale and
- * waiting up to an hour for natural refresh isn't acceptable.
- *
- * Triggered via /api/validator-registry?force=1.
- */
-export function invalidateRegistryTTL(network?: NetworkId): void {
-  if (network) {
-    _lastFetch.delete(network);
-  } else {
-    _lastFetch.clear();
+    console.error(`[registry] [${network}] Refresh failed; keeping last good snapshot (retry in ${REGISTRY_RETRY_MS / 60_000} min):`, e);
   }
 }

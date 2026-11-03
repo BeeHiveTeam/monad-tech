@@ -1,13 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getLatestBlocksBatched } from '@/lib/rpc';
 import { NETWORKS, NetworkId } from '@/lib/networks';
-import { getMoniker, getValidatorInfo } from '@/lib/validator-monikers';
-import { ensureRegistryLoaded, getRegistryEntries, getConsensusIds, getChainDataById } from '@/lib/validator-registry';
+import { getValidatorInfo } from '@/lib/validator-monikers';
+import { ensureRegistryLoaded, getRegistryEntries, getConsensusIds, getChainDataById, getRegistryStatus } from '@/lib/validator-registry';
 import { setBlockCache } from '@/lib/block-cache';
 import { setListResult } from '@/lib/listResultCache';
-import { getMinerAggregate, getAggregateState } from '@/lib/wsBlockStream';
-import { getValidatorIdForBlock, recordBeneficiary, getBeneficiaryForValidator } from '@/lib/beneficiaryMap';
-import { computeValidatorMetrics, computeTotalActiveStake, isInActiveSet, computeAuthStake, computeRealizedApr } from '@/lib/validatorMetrics';
+import { getAggregateState, getLatestBlocks as getRingBlocks } from '@/lib/wsBlockStream';
+import { getValidatorIdForBlock, recordBeneficiary, getBeneficiaryForValidator, getBeneficiaryMapState } from '@/lib/beneficiaryMap';
+import { computeValidatorMetrics, computeTotalActiveStake, isInActiveSet, computeAuthStake, computeRealizedApr, applyValidatorFreshness } from '@/lib/validatorMetrics';
 
 export const dynamic = 'force-dynamic';
 
@@ -24,7 +24,6 @@ export const dynamic = 'force-dynamic';
 // Was 5min — refresh storms every 6min were caused by tickValidatorSetTracker
 // (60s tick) repeatedly hitting the cache miss boundary.
 const FRESH_TTL_MS = 15 * 60_000;
-const STALE_TTL_MS = 30 * 60_000;  // then serve stale while revalidating in background
 // SAMPLE_BLOCKS 500: 500 blocks ≈ 200s of history at 0.4s block time, still
 // covers 5+ leader rotations (validator set ~200 active = ~80s/rotation).
 // Was 1000 — combined with batch=50 it overflowed monad-rpc triedb_env
@@ -54,7 +53,20 @@ async function computeValidators(network: NetworkId) {
   // state at 15:23 UTC (revision 3) had 0 WARN/30min with batch=20 and 3 conns.
   // Lesson: changes interact in non-obvious ways under load — revert rather
   // than try-and-measure when in doubt.
-  const blocks = await getLatestBlocksBatched(network, SAMPLE_BLOCKS, false, 20, 200);
+  const scanner = getBeneficiaryMapState(network);
+  const scannerFresh = scanner.highestBlock > 0 && scanner.ageMs >= 0 && scanner.ageMs < 60_000;
+  const ring = network === 'testnet' && scannerFresh
+    ? getRingBlocks(1000).filter(b => b.txs !== null && b.number <= scanner.highestBlock).slice(0, SAMPLE_BLOCKS)
+    : [];
+  const source = ring.length >= 100 ? 'ws-ring' as const : 'rpc-sample' as const;
+  let blocks: unknown[] = source === 'ws-ring'
+    ? ring.map(b => ({ number: '0x' + b.number.toString(16), timestamp: '0x' + b.timestamp.toString(16),
+        miner: b.miner, hash: b.hash, transactions: b.txs!.map(t => t.hash) }))
+    : await getLatestBlocksBatched(network, SAMPLE_BLOCKS, false, 20, 200);
+  // Align a fallback sample with the completed scanner prefix too.
+  if (scannerFresh && source === 'rpc-sample') {
+    blocks = (blocks as { number: string }[]).filter(b => parseInt(b.number, 16) <= scanner.highestBlock);
+  }
   setBlockCache(network, blocks as Parameters<typeof setBlockCache>[1]);
 
   // Per-ID chain data (NOT auth-deduped registry) — used for both attribution
@@ -95,17 +107,15 @@ async function computeValidators(network: NetworkId) {
 
     // Resolve producer authAddress via reward event → validatorId → registry.
     let attributionAddr: string | null = null;
-    const validatorId = getValidatorIdForBlock(blockNum);
+    const validatorId = getValidatorIdForBlock(blockNum, network);
     if (validatorId !== null) {
       const auth = idToAuth.get(validatorId);
       if (auth) attributionAddr = auth;
       // Record the beneficiary observation for diagnostic exposure.
-      if (block.miner) recordBeneficiary(validatorId, block.miner);
+      if (block.miner) recordBeneficiary(validatorId, block.miner, network);
     }
     if (!attributionAddr) {
-      const m = block.miner.toLowerCase();
-      if (m === '0x0000000000000000000000000000000000000000') continue;
-      attributionAddr = m;
+      continue; // Unknown producer is not a measured zero for any operator.
     }
 
     const entry = stats.get(attributionAddr) ?? {
@@ -136,6 +146,13 @@ async function computeValidators(network: NetworkId) {
     .reduce((m, b) => (m === 0 ? parseInt(b.timestamp, 16) : Math.min(m, parseInt(b.timestamp, 16))), 0);
   const windowSeconds = Math.max(1, newestTs - oldestTs);
 
+  const registry = getRegistryStatus(network);
+  const activeIds = getConsensusIds(network);
+  const activeSetComplete = activeIds.size > 0 && [...activeIds].every(id => chainData.has(id));
+  const attributionComplete = registry.complete && !registry.stale && activeSetComplete && blocks.length > 0 && ((blocks as { number: string }[]).every(b => {
+    const id = getValidatorIdForBlock(parseInt(b.number, 16), network);
+    return id != null && idToAuth.has(id);
+  }));
   const numValidators = stats.size;
   // expectedGap is still based on producer count — this is for "is this miner
   // late?" timing logic, not for stake-weighted fairness. computeValidatorMetrics
@@ -177,26 +194,9 @@ async function computeValidators(network: NetworkId) {
   const useCanonicalSet = consensusIds.size > 0;
   const totalActiveStake = computeTotalActiveStake(chainData, consensusIds);
 
-  // Cumulative aggregate from the WebSocket stream (since process start).
-  // Indexed by lowercase miner address. After 30+ minutes of runtime this
-  // gives a much larger sample (thousands of blocks) than the 500-block
-  // window above, so participation calculations are statistically stable
-  // (variance ~1σ on hours of data vs ~5σ on 500 blocks).
-  // ...but ONLY for testnet. getMinerAggregate/getAggregateState read a single un-keyed global
-  // fed by the testnet websocket, so for mainnet this handed computeValidatorMetrics a testnet
-  // block count as the denominator: participationLong came out 0.0% for every mainnet validator,
-  // which propagated into computeRealizedApr (APR 0.0%) and the composite score. Passing 0 makes
-  // the helper return participationLong = null, and the APR falls back to the window figure —
-  // i.e. "not measured" instead of "measured as zero".
-  const aggregateAvailable = network === 'testnet';
-  const aggregateMap = new Map<string, ReturnType<typeof getMinerAggregate>[number]>();
-  if (aggregateAvailable) for (const a of getMinerAggregate()) aggregateMap.set(a.miner, a);
-  // Full zero-shape, not a partial: the same object is echoed into the response `aggregate`
-  // block below, so a mainnet caller must see zeros (nothing observed) rather than the testnet
-  // stream's block/tx/miner counts.
-  const aggregateState = aggregateAvailable
-    ? getAggregateState()
-    : { uniqueMiners: 0, totalBlocks: 0, totalTxs: 0, firstBlock: null, startedAt: Date.now(), windowMs: 0 };
+  // Persisted WS counts are keyed by beneficiary, not validator identity. Shared,
+  // changed and zero beneficiaries cannot safely be assigned retrospectively.
+  const aggregateState = network === 'testnet' ? getAggregateState() : null;
 
   const validators = Array.from(stats.values())
     .map(v => {
@@ -211,8 +211,7 @@ async function computeValidators(network: NetworkId) {
       const isActiveSet = auth.activeIds.length > 0
         ? true
         : isInActiveSet(info?.validatorId, stakeMon, consensusIds);
-      const agg = aggregateMap.get(v.address);
-      const benef = info?.validatorId ? getBeneficiaryForValidator(info.validatorId) : null;
+      const benef = info?.validatorId ? getBeneficiaryForValidator(info.validatorId, network) : null;
 
       // Single source of truth for ageSeconds, activeRatio, expectedGap,
       // personalGap, participationPct, participationLong, health, sharePct.
@@ -220,6 +219,7 @@ async function computeValidators(network: NetworkId) {
       // can never drift again. See [[validator-participation-divergence-2026-05-01]].
       const m = computeValidatorMetrics({
         blocksProduced: v.blocksProduced,
+        attributionComplete,
         firstBlockTs: v.firstBlockTs,
         lastBlockTs: v.lastBlockTs,
         newestTs,
@@ -230,8 +230,8 @@ async function computeValidators(network: NetworkId) {
         stakeMon,
         isActiveSet,
         totalActiveStake,
-        cumulativeBlocksObserved: aggregateState.totalBlocks,
-        cumulativeMinerBlocks: agg?.blocks ?? 0,
+        cumulativeBlocksObserved: null,
+        cumulativeMinerBlocks: null,
       });
 
       // Realized APR derived from stake-share × participation × per-block reward.
@@ -268,12 +268,15 @@ async function computeValidators(network: NetworkId) {
         participationLong: m.participationLong,      // cumulative since process start (stable)
         // Cumulative blocks/txs since aggregator started (process boot).
         // Useful for "long-running performance" view of a validator.
-        cumulativeBlocks: agg?.blocks ?? 0,
-        cumulativeTxs: agg?.txs ?? 0,
+        cumulativeBlocks: null,
+        cumulativeTxs: null,
+        attributionComplete,
+        longWindowStatus: 'unavailable-beneficiary-history',
         // Realized APR: aprDelegator = net of commission (delegator earns this),
         // aprGross = block-reward yield against stake before commission split.
         aprDelegator: apr?.aprDelegator ?? null,
         aprGross: apr?.aprGross ?? null,
+        aprMethodology: apr?.methodology ?? null,
         health: m.health,
         isNewInWindow: m.isNewInWindow,
         activeWindowSeconds: Math.round(m.activeWindowSeconds),
@@ -315,6 +318,9 @@ async function computeValidators(network: NetworkId) {
 
   return {
     network,
+    source,
+    registry,
+    building: !registry.complete,
     sampleSize: blocks.length,
     activeValidators,
     activeOperators,                                // distinct authAddresses (≤ activeValidators)
@@ -332,15 +338,30 @@ async function computeValidators(network: NetworkId) {
     // Cumulative stream stats — supports the long-window participation values
     // on each validator (participationLong + cumulativeBlocks).
     aggregate: {
-      windowSec: Math.round(aggregateState.windowMs / 1000),
-      totalBlocksObserved: aggregateState.totalBlocks,
-      totalTxsObserved: aggregateState.totalTxs,
-      uniqueMiners: aggregateState.uniqueMiners,
-      firstBlock: aggregateState.firstBlock,
+      identity: 'raw-beneficiary-not-validator',
+      available: aggregateState != null,
+      windowSec: Math.round((aggregateState?.windowMs ?? 0) / 1000),
+      totalBlocksObserved: (aggregateState?.totalBlocks ?? 0),
+      totalTxsObserved: (aggregateState?.totalTxs ?? 0),
+      uniqueMiners: (aggregateState?.uniqueMiners ?? 0),
+      firstBlock: (aggregateState?.firstBlock ?? null),
     },
     updatedAt: Date.now(),
+    dataAsOf: newestTs * 1000,
+    attribution: { complete: attributionComplete, source: 'validator-reward-events', longWindow: 'unavailable', activeSetComplete },
     validators,
   };
+}
+
+function snapshotResponse(raw: unknown) {
+  const data = raw as Awaited<ReturnType<typeof computeValidators>>;
+  const now = Date.now();
+  const dataAsOf = data.dataAsOf || data.updatedAt;
+  const registry = getRegistryStatus(data.network);
+  const effectiveAsOf = registry.complete && !registry.stale ? dataAsOf : 0;
+  return { ...data, registry, dataAsOf, receivedAt: now,
+    stale: !registry.complete || registry.stale || now - dataAsOf > 60_000, ageSeconds: Math.max(0, Math.floor((now - dataAsOf) / 1000)),
+    validators: data.validators.map(v => applyValidatorFreshness(v, effectiveAsOf, now)) };
 }
 
 function refreshInBackground(network: NetworkId) {
@@ -353,7 +374,7 @@ function refreshInBackground(network: NetworkId) {
 }
 
 // Warm up cache on server start
-refreshInBackground('testnet');
+if (process.env.MONAD_BACKGROUND_DISABLED !== '1') refreshInBackground('testnet');
 
 export async function GET(req: NextRequest) {
   const raw = req.nextUrl.searchParams.get('network') || 'testnet';
@@ -365,8 +386,13 @@ export async function GET(req: NextRequest) {
   const cached = cache.get(network);
   const age = cached ? Date.now() - cached.ts : Infinity;
 
-  if (cached && age < FRESH_TTL_MS) {
-    return NextResponse.json(cached.data);
+  const cachedSource = (cached?.data as { source?: string } | undefined)?.source;
+  const scanner = getBeneficiaryMapState(network);
+  const ringReady = network === 'testnet' && scanner.ageMs >= 0 && scanner.ageMs < 60_000
+    && getRingBlocks(1000).filter(b => b.txs !== null && b.number <= scanner.highestBlock).length >= 100;
+  const freshnessTtl = cachedSource === 'ws-ring' || ringReady ? 30_000 : FRESH_TTL_MS;
+  if (cached && age < freshnessTtl) {
+    return NextResponse.json(snapshotResponse(cached.data));
   }
 
   // Kick off a refresh in background regardless; serve whatever we have.
@@ -374,11 +400,7 @@ export async function GET(req: NextRequest) {
 
   if (cached) {
     // Serve stale copy while refresh runs.
-    return NextResponse.json({
-      ...(cached.data as object),
-      stale: age >= FRESH_TTL_MS,
-      ageSeconds: Math.floor(age / 1000),
-    });
+    return NextResponse.json(snapshotResponse(cached.data));
   }
 
   // No cache at all — tell client we're building. Client retries on interval.

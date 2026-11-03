@@ -4,8 +4,20 @@ import Link from 'next/link';
 
 interface NakamotoEntry { n: number; cumPct: number }
 interface TopValidator { address: string; moniker: string | null; stakeMon: number; sharePct: number }
+interface Cadence {
+  sampleSize: number;
+  avgIntervalMs: number | null;
+  medianIntervalMs: number | null;
+  jitterMs: number | null;
+  p95IntervalMs: number | null;
+  stabilityScore: number | null;
+  source: 'ws-arrival' | 'chain-seconds';
+  note: string;
+}
+
 interface NetworkHealth {
   fetchedAt: number;
+  cadence: Cadence;
   decentralization: {
     totalValidators: number;
     activeValidators: number;
@@ -117,19 +129,42 @@ export default function NetworkHealthCard() {
         gap: 20, marginBottom: 18,
       }}>
         <Metric
+          label="Block cadence"
+          value={d.cadence?.avgIntervalMs != null ? `${d.cadence.avgIntervalMs} ms` : '—'}
+          sub={
+            d.cadence?.avgIntervalMs == null
+              ? 'no millisecond source right now'
+              : d.cadence.source === 'ws-arrival'
+                ? `median ${d.cadence.medianIntervalMs} ms · ${d.cadence.sampleSize} intervals`
+                : 'average only — chain stamps are whole seconds'
+          }
+        />
+        <Metric
+          label="Cadence jitter"
+          /* Deliberately '—' rather than a number when the only timestamp
+             source is second-resolution: Monad blocks are ~0.4 s, so any
+             "variance in ms" derived from whole seconds would be noise. */
+          value={d.cadence?.jitterMs != null ? `±${d.cadence.jitterMs} ms` : '—'}
+          sub={
+            d.cadence?.jitterMs == null
+              ? 'not measurable from second-resolution timestamps'
+              : `p95 ${d.cadence.p95IntervalMs} ms · ${d.cadence.stabilityScore}% within ±50% of median`
+          }
+        />
+        <Metric
           label="Nakamoto (33%)"
           value={dc.nakamoto.threshold33.n}
-          sub={`min validators to halt liveness (>1/3 stake)`}
+          sub={`min operators to halt liveness (>1/3 stake)`}
         />
         <Metric
           label="Nakamoto (66%)"
           value={dc.nakamoto.threshold66.n}
-          sub={`min validators for safety attack (>2/3)`}
+          sub={`min operators for safety attack (>2/3)`}
         />
         <Metric
           label="Top-10 stake"
           value={`${dc.top10SharePct.toFixed(1)}%`}
-          sub={`of ${dc.activeValidators} active validators`}
+          sub={`of ${dc.activeValidators} operators in the active set`}
         />
         <Metric
           label="Reorgs detected"

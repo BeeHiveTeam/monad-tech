@@ -26,7 +26,7 @@ interface ValidatorDetail {
     stakeMon?: number;
     commissionPct?: number;
   } | null;
-  compositeScore?: CompositeScore;
+  compositeScore?: CompositeScore | null;
   realizedApr?: {
     aprDelegator: number;
     aprGross: number;
@@ -38,11 +38,12 @@ interface ValidatorDetail {
   activeValidatorIdsCount?: number;
   stats: {
     health: Health;
-    score: number;
+    score: number | null;
     blocksProduced: number;
     totalTxs: number;
     sharePct: number;
-    participationPct: number;
+    participationPct: number | null;
+    attributionComplete?: boolean;
     ageSeconds: number;
     lastBlockTs: number;
   };
@@ -54,6 +55,8 @@ interface ValidatorDetail {
   };
   recentBlocks: { number: number; timestamp: number; txCount: number; hash: string }[];
   fetchedAt: number;
+  dataAsOf?: number;
+  stale?: boolean;
   error?: string;
 }
 
@@ -63,10 +66,6 @@ const HEALTH_STYLE: Record<Health, { bg: string; fg: string; label: string }> = 
   missing: { bg: 'rgba(224,82,82,0.14)',   fg: '#E05252', label: 'MISSING' },
   unknown: { bg: 'rgba(138,136,112,0.14)', fg: '#8A8870', label: 'UNKNOWN' },
 };
-
-function scoreColor(s: number) {
-  return s >= 75 ? '#4CAF6E' : s >= 45 ? '#C9A84C' : '#E05252';
-}
 
 function formatStake(mon: number | undefined): string {
   if (mon == null) return '—';
@@ -121,24 +120,32 @@ export default function ValidatorDetailPage() {
 
   useEffect(() => {
     if (!address) return;
-    setLoading(true);
-    fetch(`/api/validators/${address}`)
-      .then(r => r.json())
-      .then(d => { setData(d); setLoading(false); })
-      .catch(() => setLoading(false));
-  }, [address]);
+    const controller = new AbortController();
+    const refresh = async () => {
+      try {
+        const r = await fetch(`/api/validators/${address}?network=${network}`, { signal: controller.signal });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const d = await r.json();
+        if (!controller.signal.aborted) { setData(d); setLoading(false); }
+      } catch {
+        if (!controller.signal.aborted) setLoading(false);
+      }
+    };
+    queueMicrotask(() => { if (!controller.signal.aborted) { setLoading(true); setData(null); void refresh(); } });
+    const timer = setInterval(() => { void refresh(); }, 30_000);
+    return () => { controller.abort(); clearInterval(timer); };
+  }, [address, network]);
 
   const explorer = NETWORKS[network]?.explorer ?? 'https://testnet.monadscan.com';
-  const liveState = loading ? 'loading' : 'live';
+  const liveState = loading ? 'loading' : !data || data.stale ? 'offline' : 'live';
 
   const hs = data ? HEALTH_STYLE[data.stats?.health ?? 'unknown'] : HEALTH_STYLE.unknown;
-  const sc = data?.stats?.score ?? 0;
 
   return (
     <>
       <HexBg />
       <div style={{ position: 'relative', zIndex: 1, minHeight: '100vh' }}>
-        <SiteHeader network={network} onNetworkChange={setNetwork} liveState={liveState} lastUpdate={null} />
+        <SiteHeader network={network} onNetworkChange={setNetwork} liveState={liveState} lastUpdate={data?.dataAsOf ? new Date(data.dataAsOf) : null} />
 
         <main className="site-main">
           <TabNav />
@@ -238,13 +245,13 @@ export default function ValidatorDetailPage() {
                   return [
                     { label: isMultiId ? 'Auth Stake' : 'Stake', value: formatStake(authStake), sub: stakeSub },
                     { label: 'Commission', value: formatCommission(data.info?.commissionPct) },
-                    { label: 'APR (delegator)', value: apr ? `${apr.aprDelegator.toFixed(1)}%` : '—',
-                      sub: apr ? `gross ${apr.aprGross.toFixed(1)}% · ${apr.blocksPerYearRealized.toLocaleString()} blocks/y` : undefined },
-                    { label: 'Blocks produced', value: data.stats.blocksProduced.toLocaleString('en-US') },
-                    { label: 'Block share', value: `${data.stats.sharePct.toFixed(2)}%` },
-                    { label: 'Participation', value: `${Math.min(data.stats.participationPct, 100).toFixed(0)}%`,
-                      sub: data.stats.participationPct > 100 ? `raw ${data.stats.participationPct.toFixed(0)}% (high stake)` : undefined },
-                    { label: 'Total txs', value: data.stats.totalTxs.toLocaleString('en-US') },
+                    { label: 'Projected APR (delegator)', value: apr ? `${apr.aprDelegator.toFixed(1)}%` : '—',
+                      sub: apr ? `gross ${apr.aprGross.toFixed(1)}% · 18 MON/block · assumed 0.3s` : undefined },
+                    { label: 'Blocks produced', value: data.stats.attributionComplete === false ? '—' : data.stats.blocksProduced.toLocaleString('en-US') },
+                    { label: 'Block share', value: data.stats.attributionComplete === false ? '—' : `${data.stats.sharePct.toFixed(2)}%` },
+                    { label: 'Participation', value: data.stats.participationPct == null ? '—' : `${Math.min(data.stats.participationPct, 100).toFixed(0)}%`,
+                      sub: data.stats.participationPct != null && data.stats.participationPct > 100 ? `raw ${data.stats.participationPct.toFixed(0)}% (high stake)` : undefined },
+                    { label: 'Total txs', value: data.stats.attributionComplete === false ? '—' : data.stats.totalTxs.toLocaleString('en-US') },
                     { label: 'Sample size', value: `${data.context.sampleSize.toLocaleString()} blocks` },
                     { label: 'Producers in window', value: data.context.producersInWindow.toString() },
                   ];

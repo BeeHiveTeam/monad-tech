@@ -2,12 +2,11 @@ import { NextRequest, NextResponse } from 'next/server';
 import { apiError } from '@/lib/apiError';
 import { getLatestBlocksBatched } from '@/lib/rpc';
 import { getValidatorInfo } from '@/lib/validator-monikers';
-import { ensureRegistryLoaded, getRegistryEntries, getConsensusIds, getChainDataById } from '@/lib/validator-registry';
+import { ensureRegistryLoaded, getConsensusIds, getChainDataById, getRegistryStatus } from '@/lib/validator-registry';
 import { NETWORKS, NetworkId } from '@/lib/networks';
 import { getBlockCache, setBlockCache } from '@/lib/block-cache';
-import { getListValidator } from '@/lib/listResultCache';
-import { getValidatorIdForBlock, getBeneficiaryForValidator } from '@/lib/beneficiaryMap';
-import { getMinerAggregate, getAggregateState } from '@/lib/wsBlockStream';
+import { getValidatorIdForBlock, getBeneficiaryForValidator, getBeneficiaryMapState } from '@/lib/beneficiaryMap';
+import { getLatestBlocks as getRingBlocks } from '@/lib/wsBlockStream';
 import {
   computeValidatorMetrics,
   computeTotalActiveStake,
@@ -16,6 +15,7 @@ import {
   computeAuthStake,
   computeCompositeScore,
   computeRealizedApr,
+  applyValidatorFreshness,
 } from '@/lib/validatorMetrics';
 
 export const dynamic = 'force-dynamic';
@@ -41,7 +41,7 @@ export async function GET(
   const cacheKey = `${network}:${addr}`;
   const cached = cache.get(cacheKey);
   if (cached && Date.now() - cached.ts < CACHE_TTL) {
-    return NextResponse.json(cached.data);
+    return NextResponse.json(snapshotResponse(cached.data));
   }
 
   const RECENT_SHOW = 20;
@@ -58,6 +58,13 @@ export async function GET(
       miner: string; number: string; timestamp: string;
       transactions: unknown[]; hash: string;
     }[] | null;
+
+    const scanner = getBeneficiaryMapState(network);
+    if (network === 'testnet' && scanner.ageMs >= 0 && scanner.ageMs < 60_000) {
+      const ring = getRingBlocks(1000).filter(b => b.txs !== null && b.number <= scanner.highestBlock).slice(0, 500);
+      if (ring.length >= 100) blocks = ring.map(b => ({ miner: b.miner, number: '0x' + b.number.toString(16),
+        timestamp: '0x' + b.timestamp.toString(16), hash: b.hash, transactions: b.txs!.map(t => t.hash) }));
+    }
 
     if (!blocks) {
       const fetched = await getLatestBlocksBatched(network, 500, false, 20, 200);
@@ -103,13 +110,20 @@ export async function GET(
     }
     const myBlocks = validBlocks.filter(b => {
       const bn = parseInt(b.number, 16);
-      const vid = getValidatorIdForBlock(bn);
+      const vid = getValidatorIdForBlock(bn, network);
       if (vid !== null) {
         return ownedValidatorIds.has(vid);
       }
-      return b.miner.toLowerCase() === addr;
+      return false; // Beneficiary equality does not establish validator identity.
     });
     const blocksProduced = myBlocks.length;
+    const registry = getRegistryStatus(network);
+    const activeIds = getConsensusIds(network);
+    const activeSetComplete = activeIds.size > 0 && [...activeIds].every(id => _chainDataForAttribution.has(id));
+    const attributionComplete = registry.complete && !registry.stale && activeSetComplete && validBlocks.length > 0 && validBlocks.every(b => {
+      const id = getValidatorIdForBlock(parseInt(b.number, 16), network);
+      return id != null && _chainDataForAttribution.has(id);
+    });
 
     // Time window
     // Math.max() of an empty array is -Infinity (and Math.min is +Infinity), which then
@@ -146,17 +160,13 @@ export async function GET(
     // Testnet only — these globals are not keyed by network (see /api/validators for the full
     // reasoning). Feeding a mainnet validator the testnet block count produced participationLong
     // 0.0% and, downstream, APR 0.0%.
-    const aggregateAvailable = network === 'testnet';
-    const aggregateState = aggregateAvailable
-      ? getAggregateState()
-      : { uniqueMiners: 0, totalBlocks: 0, totalTxs: 0, firstBlock: null, startedAt: Date.now(), windowMs: 0 };
-    const aggForMe = aggregateAvailable ? getMinerAggregate().find(a => a.miner === addr) : undefined;
-
+    // Raw beneficiary history cannot safely be rolled up to auth identities.
     // Single source of truth — see lib/validatorMetrics.ts. Both list and
     // detail call this exact helper with identical inputs, so participationPct
     // can no longer drift between the two endpoints.
     const m = computeValidatorMetrics({
       blocksProduced,
+      attributionComplete,
       firstBlockTs,
       lastBlockTs,
       newestTs,
@@ -167,21 +177,15 @@ export async function GET(
       stakeMon,
       isActiveSet,
       totalActiveStake,
-      cumulativeBlocksObserved: aggregateState.totalBlocks,
-      cumulativeMinerBlocks: aggForMe?.blocks ?? 0,
+      cumulativeBlocksObserved: null,
+      cumulativeMinerBlocks: null,
     });
 
-    // LIST/DETAIL parity: blocksProduced/participationPct/sharePct/ageSeconds are
-    // 500-block-window stats that diverge when list and detail sample at different
-    // times. Source them from the list's already-computed result (the numbers the
-    // /validators page shows); fall back to this endpoint's own when list cache is
-    // cold. health & participationLong come from the stable aggregator and already
-    // match, so they are not overridden.
-    const listV = getListValidator(network, addr);
-    const blocksProducedFinal = listV?.blocksProduced ?? blocksProduced;
-    const participationPctFinal = listV?.participationPct ?? m.participationPct;
-    const sharePctFinal = listV?.sharePct ?? m.sharePct;
-    const ageSecondsFinal = listV?.ageSeconds ?? m.ageSeconds;
+    // Keep one coherent sample rather than mixing cached list counts with new detail context.
+    const blocksProducedFinal = blocksProduced;
+    const participationPctFinal = m.participationPct;
+    const sharePctFinal = m.sharePct;
+    const ageSecondsFinal = m.ageSeconds;
 
     const score = computeValidatorScore({
       health: m.health,
@@ -236,6 +240,8 @@ export async function GET(
 
     const data = {
       address: addr,
+      network,
+      registry,
       moniker: info?.moniker ?? null,
       info,
       stakeMon,
@@ -244,13 +250,16 @@ export async function GET(
       commissionPct: info?.commissionPct ?? null,
       registered: info != null,
       isActiveSet,
-      beneficiary: info?.validatorId ? getBeneficiaryForValidator(info.validatorId) : null,
+      beneficiary: info?.validatorId ? getBeneficiaryForValidator(info.validatorId, network) : null,
       consensusSetSize: consensusIds.size,
-      compositeScore,
+      compositeScore: attributionComplete ? compositeScore : null,
       realizedApr,
+      cumulativeBlocks: null,
+      cumulativeTxs: null,
       stats: {
+        attributionComplete,
         health: m.health,
-        score,
+        score: attributionComplete ? score : null,
         blocksProduced: blocksProducedFinal,
         totalTxs,
         sharePct: sharePctFinal,
@@ -270,12 +279,24 @@ export async function GET(
         windowSeconds,
       },
       recentBlocks,
+      dataAsOf: newestTs * 1000,
+      attribution: { complete: attributionComplete, source: 'validator-reward-events', longWindow: 'unavailable', activeSetComplete },
       fetchedAt: Date.now(),
     };
 
     cache.set(cacheKey, { ts: Date.now(), data });
-    return NextResponse.json(data);
+    return NextResponse.json(snapshotResponse(data));
   } catch (err) {
     return apiError(err, 500, `validators/${addr}`);
   }
+}
+
+function snapshotResponse(raw: unknown) {
+  const data = raw as { network: NetworkId; dataAsOf: number; stats: { lastBlockTs: number; ageSeconds: number; health: import('@/lib/validatorMetrics').ValidatorHealth }; realizedApr: unknown; compositeScore: unknown };
+  const now = Date.now();
+  const registry = getRegistryStatus(data.network);
+  const stale = !registry.complete || registry.stale || now - data.dataAsOf > 60_000;
+  return { ...data, registry, receivedAt: now, stale,
+    stats: applyValidatorFreshness(data.stats, stale ? 0 : data.dataAsOf, now),
+    ...(stale ? { realizedApr: null, compositeScore: null } : {}) };
 }

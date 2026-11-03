@@ -27,6 +27,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'Invalid network' }, { status: 400 });
   }
   const network = rawNet as NetworkId;
+  if (network === 'mainnet') return NextResponse.json({ network, available: false, comingSoon: true, rows: [], source: 'unavailable' });
 
   const windowKey = req.nextUrl.searchParams.get('window') ?? '15m';
   const windowSeconds = WINDOW_SECONDS[windowKey];

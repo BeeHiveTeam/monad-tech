@@ -7,6 +7,8 @@ export async function register() {
   // server (`next start` / PM2) — dev mode `next dev` reloads frequently and
   // would spawn multiple overlapping pollers.
   if (process.env.NEXT_RUNTIME !== 'nodejs') return;
+  // Isolated release verification must not duplicate production collectors.
+  if (process.env.MONAD_BACKGROUND_DISABLED === '1') return;
 
   // Re-entrancy guard across hot reloads / multiple register() calls.
   const g = globalThis as { __monadPollerStarted__?: boolean };
@@ -102,7 +104,7 @@ export async function register() {
       console.warn('[beneficiaryMap] tick failed:', e instanceof Error ? e.message : e));
   setTimeout(() => {
     runScannerTick();
-    setInterval(runScannerTick, 5 * 60_000);
+    setInterval(runScannerTick, 30_000);
   }, 20_000);
 
   // Public RPC catalog ping monitor — pings ~20 external Monad RPCs once per
