@@ -19,7 +19,6 @@ import HealthBadge from '@/components/HealthBadge';
 import EpochCard from '@/components/EpochCard';
 import ParallelismPanel from '@/components/ParallelismPanel';
 import TopContractsTable from '@/components/TopContractsTable';
-import MainnetSoonCard from '@/components/MainnetSoonCard';
 import { NETWORKS } from '@/lib/networks';
 import { useNetwork } from '@/lib/useNetwork';
 
@@ -59,6 +58,9 @@ interface Stats {
     progressPct: number;
   };
   sampleSize?: number;
+  source?: string;
+  dataAsOf?: number;
+  stale?: boolean;
   health: {
     state: 'normal' | 'congested' | 'offline';
     reason: string;
@@ -216,6 +218,10 @@ export default function Home() {
 
         <main className="site-main">
           <TabNav />
+          <div className="page-intro">
+            <h1>Network overview</h1>
+            <p>Live chain activity, recent blocks and observed network health.</p>
+          </div>
 
           {/* Network badge */}
           <div style={{ marginBottom: 20, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
@@ -226,38 +232,8 @@ export default function Home() {
             )}
           </div>
 
-          {/* Health + Epoch row */}
-          <div style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(min(360px, 100%), 1fr))',
-            gap: 12, marginBottom: 24,
-          }}>
-            {stats ? (
-              <HealthBadge state={stats.health.state} reason={stats.health.reason} />
-            ) : (
-              // No data yet → show neutral "congested" amber (not alarming red)
-              // to avoid the misleading "OFFLINE / STOPPED" flash on cold load.
-              <HealthBadge state="congested" reason={loading ? 'Connecting to network…' : 'Awaiting data'} />
-            )}
-            {stats?.epoch ? (
-              <EpochCard
-                current={stats.epoch.current}
-                blockInEpoch={stats.epoch.blockInEpoch}
-                blocksPerEpoch={stats.epoch.blocksPerEpoch}
-                blocksUntilNext={stats.epoch.blocksUntilNext}
-                secondsUntilNext={stats.epoch.secondsUntilNext}
-                progressPct={stats.epoch.progressPct}
-                inEpochDelayPeriod={stats.epoch.inEpochDelayPeriod}
-              />
-            ) : (
-              <div className="card" style={{ padding: '20px 24px', color: 'var(--text-muted)', fontSize: 13, display: 'flex', alignItems: 'center' }}>
-                Epoch data loading…
-              </div>
-            )}
-          </div>
-
           {/* Stat cards */}
-          <div style={{
+          <div className="home-kpi-grid" style={{
             display: 'grid',
             gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
             gap: 12, marginBottom: 24,
@@ -298,13 +274,41 @@ export default function Home() {
             />
           </div>
 
-          {/* Testnet-only widgets — sourced from our validator's Loki / WS ring /
-              InfluxDB. Mainnet has no equivalent yet (we don't run a mainnet
-              node). Show coming-soon placeholders instead of leaking testnet data. */}
+          {/* Health + Epoch row */}
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(min(360px, 100%), 1fr))',
+            gap: 12, marginBottom: 24,
+          }}>
+            {stats ? (
+              <HealthBadge state={stats.health.state} reason={stats.health.reason} />
+            ) : (
+              // No data yet → show neutral "congested" amber (not alarming red)
+              // to avoid the misleading "OFFLINE / STOPPED" flash on cold load.
+              <HealthBadge state="congested" reason={loading ? 'Connecting to network…' : 'Awaiting data'} />
+            )}
+            {stats?.epoch ? (
+              <EpochCard
+                current={stats.epoch.current}
+                blockInEpoch={stats.epoch.blockInEpoch}
+                blocksPerEpoch={stats.epoch.blocksPerEpoch}
+                blocksUntilNext={stats.epoch.blocksUntilNext}
+                secondsUntilNext={stats.epoch.secondsUntilNext}
+                progressPct={stats.epoch.progressPct}
+                inEpochDelayPeriod={stats.epoch.inEpochDelayPeriod}
+              />
+            ) : (
+              <div className="card" style={{ padding: '20px 24px', color: 'var(--text-muted)', fontSize: 13, display: 'flex', alignItems: 'center' }}>
+                Epoch data loading…
+              </div>
+            )}
+          </div>
+
+          <p className="data-context" aria-live="polite">
+            {stats ? `${stats.stale ? 'Stale snapshot' : 'Latest chain sample'} · ${net.name} · ${stats.sampleSize ?? '—'} blocks · ${stats.dataAsOf ? new Date(stats.dataAsOf).toLocaleTimeString() : 'time unavailable'}` : 'Loading chain measurements…'}
+          </p>
           {network === 'testnet' ? (
             <>
-              <ParallelismPanel range={range} />
-              <TopContractsTable network={network} />
               <ChainChart
                 mode={chartMode}
                 onModeChange={setChartMode}
@@ -315,35 +319,34 @@ export default function Home() {
                 currentGas={stats?.gasPrice ?? null}
                 currentUtil={stats?.avgGasUtilization ?? null}
               />
+              <details className="card home-advanced">
+                <summary>Execution details &amp; contract activity</summary>
+                <p className="data-context">Observed on our Testnet node. Execution peaks describe processing inside individual blocks, rather than sustained chain throughput.</p>
+                <ParallelismPanel range={range} />
+                <TopContractsTable network={network} />
+              </details>
             </>
           ) : (
-            <>
-              <MainnetSoonCard
-                title="PARALLEL EXECUTION"
-                description="retry_pct + per-block exec breakdown require Loki access to monad-execution __exec_block log lines from a node we operate. We'll enable this once we run a mainnet validator."
-              />
-              <MainnetSoonCard
-                title="TOP CONTRACTS BY RETRY RATE"
-                description="Same data dependency as parallel execution — needs our validator's Loki + WS ring buffer."
-              />
-              <MainnetSoonCard
-                title="CHAIN METRICS HISTORY"
-                description="TPS / Gas / Block utilization charts read from InfluxDB monad_chain measurement, populated by a 15s poller from our validator. Live now-stats above use the public mainnet RPC."
-              />
-            </>
+            <section className="card mainnet-capabilities" aria-labelledby="mainnet-data-heading">
+              <h2 id="mainnet-data-heading">Mainnet data coverage</h2>
+              <p>Live chain metrics and recent blocks are available. History, execution breakdowns and contract retry metrics are not yet available for Mainnet.</p>
+              <details>
+                <summary>Data sources &amp; limitations</summary>
+                <p>Current chain measurements use Mainnet RPC. Historical charts and execution insights require a separate Mainnet collection pipeline; Testnet measurements are never substituted.</p>
+              </details>
+            </section>
           )}
-
 
           {/* Tables — full-width stacked */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
             <div className="card" style={{ padding: '24px' }}>
-              <div style={{
+              <h2 style={{
                 fontFamily: 'Bebas Neue, sans-serif', fontSize: 16, letterSpacing: '0.08em',
                 color: 'var(--gold)', marginBottom: 16, paddingBottom: 12,
                 borderBottom: '1px solid var(--border)',
               }}>
                 Latest Blocks ({blocks.length})
-              </div>
+              </h2>
               {loading && blocks.length === 0 ? (
                 <div style={{ padding: '40px 0', textAlign: 'center', color: 'var(--text-muted)', fontSize: 13 }}>
                   Loading…
@@ -374,12 +377,12 @@ export default function Home() {
                 borderBottom: '1px solid var(--border)',
                 flexWrap: 'wrap',
               }}>
-                <div style={{
+                <h2 style={{
                   fontFamily: 'Bebas Neue, sans-serif', fontSize: 16, letterSpacing: '0.08em',
                   color: 'var(--gold)', whiteSpace: 'nowrap',
                 }}>
                   Latest Transactions ({txs.length})
-                </div>
+                </h2>
                 <TxSearch />
               </div>
               {loading && txs.length === 0 ? (
@@ -469,7 +472,7 @@ function ChainChart({
   };
 
   return (
-    <div className="card" style={{ padding: '20px 24px', marginBottom: 24 }}>
+    <section className="card home-chain-chart" aria-label="Chain metrics history" style={{ padding: '20px 24px', marginBottom: 24 }}>
       <div style={{
         display: 'flex', alignItems: 'baseline', justifyContent: 'space-between',
         marginBottom: 14, flexWrap: 'wrap', gap: 10,
@@ -494,6 +497,7 @@ function ChainChart({
           {(['tps', 'gas', 'util'] as const).map(m => (
             <button
               key={m}
+              aria-pressed={mode === m}
               onClick={() => onModeChange(m)}
               style={{
                 padding: '4px 12px', borderRadius: 6, border: '1px solid var(--border)',
@@ -517,6 +521,7 @@ function ChainChart({
             return (
               <button
                 key={r.key}
+                aria-pressed={active}
                 onClick={() => onRangeChange(r.key)}
                 style={{
                   padding: '3px 9px',
@@ -606,6 +611,6 @@ function ChainChart({
           </BarChart>
         </ResponsiveContainer>
       )}
-    </div>
+    </section>
   );
 }

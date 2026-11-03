@@ -132,7 +132,7 @@ export default function TopContractsTable({ network }: { network: 'testnet' | 'm
             ))}
           </div>
           <span style={{ fontSize: 10, color: 'var(--text-muted)', letterSpacing: '0.08em', marginLeft: 6 }}>MIN BLOCKS</span>
-          <select
+          <select aria-label="Minimum blocks"
             value={min}
             onChange={e => setMin(+e.target.value)}
             style={{

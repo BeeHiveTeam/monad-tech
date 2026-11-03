@@ -447,7 +447,7 @@ function ValidatorsPageInner() {
             {error && <span className="badge-red">Error — {error.slice(0, 60)}</span>}
           </div>
 
-          <div className="card" style={{ padding: '24px' }}>
+          <div className="card validator-panel" style={{ padding: '24px' }}>
             {/* Header — title row + controls row. Kept as two visual tiers so the
                 big Bebas Neue count doesn't share baseline with tiny mono chips. */}
             <div style={{
@@ -461,12 +461,12 @@ function ValidatorsPageInner() {
                   cross-epoch producers (phantoms). Showing them broken out
                   matches what the chain actually exposes. */}
               <div style={{ display: 'flex', alignItems: 'baseline', gap: 14, flexWrap: 'wrap' }}>
-                <span style={{
-                  fontFamily: 'Bebas Neue, sans-serif', fontSize: 18,
-                  letterSpacing: '0.08em', color: 'var(--gold)',
+                <h1 style={{
+                  fontFamily: 'Bebas Neue, sans-serif', fontSize: 22,
+                  letterSpacing: '0.08em', color: 'var(--gold)', margin: 0, fontWeight: 400,
                 }}>
                   Validators
-                </span>
+                </h1>
                 <span title="Validators currently in the consensus active set (snapshotStake ≥ threshold)"
                   style={{ fontFamily: 'DM Mono, monospace', fontSize: 12, color: 'var(--text)' }}>
                   active <span style={{ color: 'var(--gold)' }}>{data?.activeValidators ?? '—'}</span>
@@ -497,7 +497,7 @@ function ValidatorsPageInner() {
                   {/* View-mode toggle. Operator (default) = full operator-centric
                       columns. Delegator = APR-ranked picker (was /delegate page
                       until 2026-05-21 audit, then merged here as a view mode). */}
-                  <div role="tablist" aria-label="View mode" style={{
+                  <div className="validator-view-toggle" role="tablist" aria-label="View mode" style={{
                     display: 'inline-flex', height: 28, borderRadius: 6,
                     border: '1px solid var(--gold-dim)', overflow: 'hidden',
                   }}>
@@ -551,6 +551,7 @@ function ValidatorsPageInner() {
                     REGISTERED ONLY
                   </button>
                   <button
+                    className="validator-reset-columns"
                     onClick={resetWidths}
                     title="Reset column widths"
                     style={{
@@ -616,6 +617,7 @@ function ValidatorsPageInner() {
                 </div>
                 <input
                   type="text"
+                  aria-label="Search validators by moniker or address"
                   placeholder="Search moniker or address…"
                   value={search}
                   onChange={e => setSearch(e.target.value)}
@@ -699,7 +701,90 @@ function ValidatorsPageInner() {
               });
               const tableWidth = visibleCols.reduce((a, k) => a + widths[k], 0);
               return (
-              <div style={{ overflowX: 'auto' }}>
+              <div className="validator-results">
+                <div className="validator-mobile-list">
+                  <div style={{ display: 'flex', alignItems: 'end', flexWrap: 'wrap', gap: 8, marginBottom: 4 }}>
+                    <label style={{ display: 'grid', gap: 6, flex: 1, minWidth: 150, color: 'var(--text-muted)', fontSize: 12 }}>
+                      Sort validators by
+                      <select
+                        aria-label="Sort validators by"
+                        value={sortKey}
+                        onChange={event => handleSort(event.target.value as SortKey)}
+                        style={{ width: '100%', minHeight: 44, background: 'var(--surface2)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 6, padding: '8px 10px' }}
+                      >
+                        <option value="stake">Current stake</option>
+                        <option value="commission">Commission</option>
+                        <option value="apr">Projected APR</option>
+                        <option value="uptime">Participation</option>
+                        <option value="share">Block share</option>
+                        {view === 'operator' ? <>
+                          <option value="score">Health score</option>
+                          <option value="health">Status</option>
+                          <option value="blocks">Blocks produced</option>
+                          <option value="txs">Transactions</option>
+                          <option value="age">Last block</option>
+                        </> : <option value="pick">Delegator pick</option>}
+                      </select>
+                    </label>
+                    <button
+                      type="button"
+                      aria-label={`Change sort direction, currently ${sortDir === 'desc' ? 'descending' : 'ascending'}`}
+                      onClick={() => { setSortDir(direction => direction === 'desc' ? 'asc' : 'desc'); setPage(1); }}
+                      style={{ minHeight: 44, border: '1px solid var(--border)', borderRadius: 6, padding: '8px 12px', color: 'var(--gold)', background: 'var(--surface2)', fontSize: 12 }}
+                    >
+                      {sortDir === 'desc' ? '↓ Desc' : '↑ Asc'}
+                    </button>
+                  </div>
+                  {processed.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE).map((v, index) => {
+                    const name = v.moniker || (v.registered === false ? 'Unregistered validator' : shortAddr(v.address));
+                    const selected = selectedForCompare.includes(v.address);
+                    const selectionFull = selectedForCompare.length >= 5 && !selected;
+                    const hs = v.registered && v.isActiveSet === false
+                      ? { fg: '#C9A84C', bg: 'rgba(201,168,76,0.1)', label: 'REGISTERED · INACTIVE' }
+                      : HEALTH_STYLE[v.health];
+                    const productionKnown = v.attributionComplete !== false;
+                    return (
+                      <article key={v.address} aria-labelledby={`mobile-validator-${v.address}`} style={{ border: `1px solid ${selected ? 'var(--gold)' : 'var(--border)'}`, borderRadius: 10, padding: 14, background: 'var(--surface2)', minWidth: 0 }}>
+                        <div style={{ display: 'flex', alignItems: 'start', gap: 10, justifyContent: 'space-between' }}>
+                          <div style={{ minWidth: 0 }}>
+                            <div style={{ color: 'var(--text-muted)', fontSize: 11, marginBottom: 4 }}>#{(page - 1) * PAGE_SIZE + index + 1}</div>
+                            <h2 id={`mobile-validator-${v.address}`} style={{ margin: 0, fontSize: 15, fontWeight: 500, lineHeight: 1.5, overflowWrap: 'anywhere' }}>
+                              <Link href={`/validators/${v.address}`} style={{ color: 'var(--gold)', textDecoration: 'none' }}>{name}</Link>
+                            </h2>
+                            <div style={{ color: 'var(--text-muted)', fontSize: 12, fontFamily: 'DM Mono, monospace', marginTop: 3 }}>{shortAddr(v.address)}</div>
+                          </div>
+                          <label title={selectionFull ? 'Select up to five validators. Clear another selection first.' : `Compare ${name}`} style={{ minWidth: 44, minHeight: 44, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, border: '1px solid var(--border)', borderRadius: 6 }}>
+                            <input type="checkbox" checked={selected} disabled={selectionFull} aria-label={`Compare ${name}`} onChange={() => toggleCompareSelect(v.address)} style={{ width: 20, height: 20, accentColor: 'var(--gold)' }} />
+                          </label>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 12, fontSize: 11, color: hs.fg, overflowWrap: 'anywhere' }}>
+                          <span aria-hidden="true" style={{ width: 6, height: 6, borderRadius: '50%', background: hs.fg, flexShrink: 0 }} />
+                          {hs.label}
+                        </div>
+                        <dl style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '14px 12px', margin: '16px 0 12px' }}>
+                          <MobileValidatorMetric label="Current stake · MON" value={v.currentStakeMon != null ? v.currentStakeMon.toLocaleString('en-US', { maximumFractionDigits: 2 }) : '—'} />
+                          <MobileValidatorMetric label="Participation" value={v.participationPct == null ? '—' : `${Math.min(v.participationPct, 100).toFixed(0)}%`} />
+                          <MobileValidatorMetric label="Projected APR" value={v.aprDelegator == null ? '—' : `${v.aprDelegator.toFixed(1)}%`} />
+                          <MobileValidatorMetric label="Commission" value={v.commissionPct == null ? '—' : `${v.commissionPct.toFixed(0)}%`} />
+                        </dl>
+                        <details style={{ borderTop: '1px solid var(--border)', paddingTop: 4 }}>
+                          <summary style={{ minHeight: 40, display: 'list-item', padding: '10px 0', fontSize: 12, color: 'var(--text-muted)', cursor: 'pointer' }}>More metrics</summary>
+                          <dl style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 12, margin: '4px 0 14px' }}>
+                            <MobileValidatorMetric label={view === 'operator' ? 'Health score' : 'Delegator pick'} value={view === 'operator' ? (v.health === 'unknown' ? '—' : String(v.score)) : (v.pick == null ? '—' : v.pick.toFixed(1))} />
+                            <MobileValidatorMetric label="Block share" value={productionKnown ? `${v.sharePct.toFixed(1)}%` : '—'} />
+                            <MobileValidatorMetric label="Blocks produced" value={productionKnown ? v.blocksProduced.toLocaleString('en-US') : '—'} />
+                            <MobileValidatorMetric label="Last block" value={productionKnown && v.lastBlockTs > 0 ? `${shortAge(v.ageSeconds)} ago` : '—'} />
+                          </dl>
+                        </details>
+                        <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', borderTop: '1px solid var(--border)' }}>
+                          <Link href={`/validators/${v.address}`} style={{ color: 'var(--gold)', fontSize: 12, padding: '12px 0', textDecoration: 'none', minHeight: 44 }}>Validator details →</Link>
+                          <Link href={`/validators/${v.address}/audit`} style={{ color: 'var(--text-muted)', fontSize: 12, padding: '12px 0', textDecoration: 'none', minHeight: 44 }}>Audit trail →</Link>
+                        </div>
+                      </article>
+                    );
+                  })}
+                </div>
+                <div className="validator-desktop-table" style={{ overflowX: 'auto' }}>
                 <table
                   className="resizable-table"
                   style={{ width: tableWidth }}
@@ -736,8 +821,8 @@ function ValidatorsPageInner() {
                         <ResizeHandle colKey="commission" onMouseDown={startResize('commission')} active={resizing === 'commission'} />
                       </th>
                       <th style={thStyle('apr')} onClick={() => handleSort('apr')}
-                          title="Realized delegator APR — block-reward yield against stake, net of commission. Derived from stake-share × participation × per-block reward, annualised. Testnet has ~80% APR due to inflationary rewards.">
-                        APR <SortIcon active={sortKey === 'apr'} dir={sortDir} />
+                          title="Projected delegator APR: observed participation, assumed 18 MON reward and 0.3s block time, net of commission. Short samples vary; this is not guaranteed yield.">
+                        Projected APR <SortIcon active={sortKey === 'apr'} dir={sortDir} />
                         <ResizeHandle colKey="apr" onMouseDown={startResize('apr')} active={resizing === 'apr'} />
                       </th>
                       {view === 'delegator' && (
@@ -818,6 +903,7 @@ function ValidatorsPageInner() {
                             <input
                               type="checkbox"
                               checked={isSelected}
+                              aria-label={`Compare ${v.moniker || shortAddr(v.address)}`}
                               disabled={selectionFull}
                               onChange={() => toggleCompareSelect(v.address)}
                               onClick={e => e.stopPropagation()}
@@ -968,6 +1054,7 @@ function ValidatorsPageInner() {
                     })}
                   </tbody>
                 </table>
+                </div>
                 {processed.length > PAGE_SIZE && (
                   <div style={{ marginTop: 8 }}>
                     <Pagination
@@ -990,7 +1077,7 @@ function ValidatorsPageInner() {
             <div style={{ marginTop: 16, paddingTop: 12, borderTop: '1px solid var(--border)', fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.7 }}>
               <div style={{ marginBottom: 6 }}>
                 <b style={{ color: 'var(--text)' }}>Score</b> — 0–100 rating:
-                Health (40%) + Uptime (40%) + Recency (20%).{' '}
+                Health (40%) + Participation (40%) + Recency (20%).{' '}
                 <span style={{ color: '#4CAF6E' }}>≥75</span> excellent,{' '}
                 <span style={{ color: '#C9A84C' }}>45–74</span> normal,{' '}
                 <span style={{ color: '#E05252' }}>&lt;45</span> problem.
@@ -1003,10 +1090,10 @@ function ValidatorsPageInner() {
                 {data && <> Average interval: ~{data.expectedGapSeconds}s.</>}
               </div>
               <div style={{ marginBottom: 6 }}>
-                <b style={{ color: 'var(--text)' }}>Uptime</b> — blocks produced ÷ expected (stake-weighted). 100% = on target.
+                <b style={{ color: 'var(--text)' }}>Participation</b> — blocks produced ÷ expected (stake-weighted). 100% = on target; this is not node uptime.
               </div>
               <div>
-                Data from the <code style={{ color: 'var(--gold-dim)' }}>miner</code> field of the last {data?.sampleSize ?? 0} blocks.
+                Block production uses staking reward events matched to validator IDs across the last {data?.sampleSize ?? 0} blocks; unavailable or ambiguous attribution is shown as unknown.
                 Monad public RPC doesn&apos;t expose votes / peers — metrics are computed from leader blocks only.
               </div>
             </div>
@@ -1018,6 +1105,15 @@ function ValidatorsPageInner() {
         </main>
       </div>
     </>
+  );
+}
+
+function MobileValidatorMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div style={{ minWidth: 0 }}>
+      <dt style={{ fontSize: 11, lineHeight: 1.5, color: 'var(--text-muted)', marginBottom: 4 }}>{label}</dt>
+      <dd style={{ margin: 0, fontSize: 15, lineHeight: 1.4, color: 'var(--text)', fontFamily: 'DM Mono, monospace', overflowWrap: 'anywhere' }}>{value}</dd>
+    </div>
   );
 }
 

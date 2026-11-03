@@ -155,6 +155,7 @@ export default function MyDelegationsPage() {
               value={input}
               onChange={e => setInput(e.target.value)}
               placeholder="0xYourDelegatorAddress..."
+              aria-label="Delegator wallet address"
               style={{
                 flex: 1, minWidth: 280,
                 padding: '8px 12px',

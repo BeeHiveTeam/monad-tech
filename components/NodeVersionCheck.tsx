@@ -45,37 +45,34 @@ export default function NodeVersionCheck() {
       borderLeft: `3px solid ${statusColor}`,
     }}>
       <div style={{
-        display: 'grid',
-        gridTemplateColumns: 'auto auto auto auto auto 1fr',
-        gap: 20, alignItems: 'center', flexWrap: 'wrap',
+        display: 'flex', flexWrap: 'wrap',
+        gap: '16px 24px', alignItems: 'flex-start', minWidth: 0,
       }}>
-        <div>
+        <div style={{ flex: '1 1 140px', minWidth: 0 }}>
           <div style={{ fontSize: 9, letterSpacing: '0.08em', color: 'var(--text-muted)', marginBottom: 2 }}>
             INSTALLED (BeeHive)
           </div>
-          <div style={{ fontFamily: 'DM Mono, monospace', fontSize: 16, color: 'var(--gold)' }}>
+          <div style={{ fontFamily: 'DM Mono, monospace', fontSize: 16, color: 'var(--gold)', overflowWrap: 'anywhere' }}>
             {v.installed ? `v${v.installed}` : '—'}
           </div>
         </div>
-        <div style={{ color: 'rgba(138,136,112,0.25)', fontSize: 12 }}>vs</div>
-        <div>
+        <div style={{ flex: '1 1 140px', minWidth: 0 }}>
           <div style={{ fontSize: 9, letterSpacing: '0.08em', color: 'var(--text-muted)', marginBottom: 2 }}>
             RPC GATEWAY
           </div>
           <div style={{
-            fontFamily: 'DM Mono, monospace', fontSize: 14,
+            fontFamily: 'DM Mono, monospace', fontSize: 14, overflowWrap: 'anywhere',
             color: v.rpcMatchesInstalled === false ? '#E8A020' : 'var(--text-muted)',
           }}>
             {v.rpc ?? '—'}
             {v.rpcMatchesInstalled === false && <span style={{ marginLeft: 6, fontSize: 10 }}>≠</span>}
           </div>
         </div>
-        <div style={{ color: 'rgba(138,136,112,0.25)', fontSize: 12 }}>→</div>
-        <div>
+        <div style={{ flex: '1 1 140px', minWidth: 0 }}>
           <div style={{ fontSize: 9, letterSpacing: '0.08em', color: 'var(--text-muted)', marginBottom: 2 }}>
             LATEST RELEASE
           </div>
-          <div style={{ fontFamily: 'DM Mono, monospace', fontSize: 16, color: 'var(--gold)' }}>
+          <div style={{ fontFamily: 'DM Mono, monospace', fontSize: 16, color: 'var(--gold)', overflowWrap: 'anywhere' }}>
             {v.latestUrl && v.latest ? (
               <a href={v.latestUrl} target="_blank" rel="noreferrer" style={{
                 color: 'inherit', textDecoration: 'none',
@@ -86,12 +83,12 @@ export default function NodeVersionCheck() {
             ) : (v.latest ?? '—')}
           </div>
         </div>
-        <div style={{ textAlign: 'right' }}>
-          <div style={{
-            display: 'inline-flex', alignItems: 'center', gap: 6,
+        <div style={{ flex: '1 1 180px', minWidth: 0 }}>
+          <div role="status" style={{
+            display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', maxWidth: '100%',
             padding: '4px 10px', borderRadius: 4,
-            background: `${statusColor}15`,
-            border: `1px solid ${statusColor}40`,
+            background: v.isUpToDate == null ? 'rgba(138,136,112,0.08)' : `${statusColor}15`,
+            border: v.isUpToDate == null ? '1px solid var(--border)' : `1px solid ${statusColor}40`,
             fontFamily: 'DM Mono, monospace', fontSize: 11, letterSpacing: '0.08em',
             color: statusColor,
           }}>

@@ -1,6 +1,6 @@
 'use client';
 import Link from 'next/link';
-import { formatDistanceToNow } from 'date-fns';
+import { useEffect, useState } from 'react';
 import { NetworkId } from '@/lib/networks';
 
 interface Block {
@@ -41,8 +41,15 @@ function gasBar(used: number, limit: number) {
 const nowrap: React.CSSProperties = { whiteSpace: 'nowrap' };
 
 export default function BlocksTable({ blocks }: Props) {
+  const [nowSec, setNowSec] = useState<number | null>(null);
+  useEffect(() => {
+    const tick = () => setNowSec(Math.floor(Date.now() / 1000));
+    const initial = setTimeout(tick, 0);
+    const timer = setInterval(tick, 1000);
+    return () => { clearTimeout(initial); clearInterval(timer); };
+  }, []);
   return (
-    <div style={{ overflowX: 'auto' }}>
+    <div className="block-table-scroll" tabIndex={0} role="region" aria-label="Recent blocks; scroll horizontally for all columns" style={{ overflowX: 'auto' }}>
       <table style={{ minWidth: 720 }}>
         <thead>
           <tr>
@@ -65,7 +72,9 @@ export default function BlocksTable({ blocks }: Props) {
                 </Link>
               </td>
               <td style={{ color: 'var(--text-muted)', fontSize: 12, ...nowrap }}>
-                {formatDistanceToNow(new Date(b.timestamp * 1000), { addSuffix: true })}
+                <time dateTime={new Date(b.timestamp * 1000).toISOString()} title={new Date(b.timestamp * 1000).toLocaleString()}>
+                  {nowSec == null ? '—' : `${Math.max(0, nowSec - b.timestamp)}s ago`}
+                </time>
               </td>
               <td style={{ textAlign: 'right', fontFamily: 'DM Mono, monospace', fontSize: 13, ...nowrap }}>
                 {b.txCount}

@@ -107,7 +107,8 @@ export default function BeeHivePage() {
                 style={{ display: 'block' }}
               />
               <div style={{ minWidth: 0 }}>
-                <div style={{
+                <h1 style={{
+                  margin: 0, fontWeight: 400,
                   fontFamily: 'Bebas Neue, sans-serif', fontSize: 32,
                   letterSpacing: '0.1em', lineHeight: 1,
                 }}>
@@ -117,7 +118,7 @@ export default function BeeHivePage() {
                     color: 'var(--text-muted)', fontSize: 18,
                     marginLeft: 12, letterSpacing: '0.15em',
                   }}>VALIDATOR</span>
-                </div>
+                </h1>
                 <div style={{
                   fontSize: 13, color: 'var(--text-muted)', marginTop: 6,
                   lineHeight: 1.5, maxWidth: 680,

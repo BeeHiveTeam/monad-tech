@@ -94,7 +94,14 @@ function fmtAge(ms: number): string {
   return `${Math.floor(dt / 86_400_000)}d ago`;
 }
 
-export default function IncidentTimeline() {
+export interface IncidentFeedStatus {
+  state: 'loading' | 'live' | 'offline';
+  updatedAt: number | null;
+}
+
+export default function IncidentTimeline({ onStatusChange }: {
+  onStatusChange?: (status: IncidentFeedStatus) => void;
+}) {
   const [range, setRange] = useState<Range>('6h');
   const [severity, setSeverity] = useState<Severity | 'all'>('all');
   const [data, setData] = useState<ApiResponse | null>(null);
@@ -104,7 +111,7 @@ export default function IncidentTimeline() {
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
+    let lastSuccessfulAt: number | null = null;
     const load = async () => {
       try {
         const q = new URLSearchParams({ range });
@@ -112,14 +119,29 @@ export default function IncidentTimeline() {
         const r = await fetch(`/api/incidents?${q.toString()}`, { cache: 'no-store' });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         const j = await r.json() as ApiResponse;
-        if (!cancelled) { setData(j); setErr(null); }
-      } catch (e) { if (!cancelled) setErr(String(e)); }
+        if (!Array.isArray(j.incidents) || !j.counts) throw new Error('Invalid incident response');
+        if (!cancelled) {
+          setData(j); setErr(null);
+          lastSuccessfulAt = Number.isFinite(j.fetchedAt) ? j.fetchedAt : Date.now();
+          onStatusChange?.({ state: 'live', updatedAt: lastSuccessfulAt });
+        }
+      } catch (e) {
+        if (!cancelled) {
+          setErr(String(e));
+          onStatusChange?.({ state: 'offline', updatedAt: lastSuccessfulAt });
+        }
+      }
       finally { if (!cancelled) setLoading(false); }
     };
-    load();
+    queueMicrotask(() => {
+      if (cancelled) return;
+      setLoading(true);
+      onStatusChange?.({ state: 'loading', updatedAt: null });
+      void load();
+    });
     const t = setInterval(load, 30_000);
     return () => { cancelled = true; clearInterval(t); };
-  }, [range, severity]);
+  }, [range, severity, onStatusChange]);
 
   const toggle = (id: string) => {
     setExpanded(prev => {
@@ -137,9 +159,9 @@ export default function IncidentTimeline() {
           display: 'flex', alignItems: 'baseline', gap: 12,
           flexWrap: 'wrap', marginBottom: 4,
         }}>
-          <span style={{ fontFamily: 'Bebas Neue, sans-serif', fontSize: 20, letterSpacing: '0.08em', color: 'var(--gold)' }}>
-            INCIDENT TIMELINE
-          </span>
+          <h2 style={{ fontFamily: 'Bebas Neue, sans-serif', fontSize: 20, letterSpacing: '0.08em', color: 'var(--gold)', margin: 0, fontWeight: 400 }}>
+            Incident timeline
+          </h2>
           <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
             retry spikes · vote delay · tip lag · block stalls · reorgs · state root · state sync · consensus stress · exec lag · critical logs · commission changes · real undelegations
           </span>

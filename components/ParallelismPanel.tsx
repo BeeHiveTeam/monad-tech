@@ -144,7 +144,7 @@ export default function ParallelismPanel({ range }: { range: Range }) {
         </div>
 
         <div className="card card-hover" style={KPI_CARD}>
-          <span style={KPI_LABEL}>effective TPS peak</span>
+          <span style={KPI_LABEL}>Execution TPS peak</span>
           <span style={{ ...KPI_VALUE, color: 'var(--gold)' }}>
             {s ? s.tpsePeak.toLocaleString() : '—'}
           </span>

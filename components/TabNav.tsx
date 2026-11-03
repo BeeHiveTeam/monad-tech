@@ -1,6 +1,6 @@
 'use client';
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
 
 interface Tab {
@@ -19,7 +19,7 @@ interface Tab {
 const TABS: Tab[] = [
   { label: 'Network Status', href: '/' },
   { label: 'Validators', href: '/validators' },
-  { label: 'My Delegations', href: '/my-delegations', badge: 'NEW' },
+  { label: 'My Delegations', href: '/my-delegations' },
   { label: 'Network Health', href: '/network' },
   { label: 'Incidents', href: '/incidents' },
   { label: 'Tools', href: '/tools' },
@@ -28,6 +28,10 @@ const TABS: Tab[] = [
 
 export default function TabNav() {
   const pathname = usePathname();
+  const router = useRouter();
+  const activeHref = TABS.find(tab => tab.href === '/'
+    ? pathname === '/'
+    : pathname === tab.href || pathname.startsWith(`${tab.href}/`))?.href ?? '';
   const navRef = useRef<HTMLDivElement | null>(null);
   const activeRef = useRef<HTMLDivElement | null>(null);
   const [fades, setFades] = useState({ left: false, right: false });
@@ -56,7 +60,25 @@ export default function TabNav() {
   }, [pathname]);
 
   return (
-    <div style={{ position: 'relative', marginBottom: 24 }}>
+    <nav aria-label="Main sections" style={{ position: 'relative', marginBottom: 24 }}>
+    <div className="mobile-section-nav">
+      <label htmlFor="mobile-section-select" style={{ fontSize: 11, letterSpacing: '0.08em', color: 'var(--text-muted)' }}>
+        SECTION
+      </label>
+      <select
+        id="mobile-section-select"
+        value={activeHref}
+        onChange={event => router.push(event.target.value)}
+        style={{
+          width: '100%', minWidth: 0, minHeight: 44, marginTop: 6,
+          padding: '10px 12px', border: '1px solid var(--border)', borderRadius: 6,
+          background: 'var(--surface2)', color: 'var(--gold)', fontSize: 14,
+        }}
+      >
+        {!activeHref && <option value="" disabled>Select a section</option>}
+        {TABS.map(tab => <option key={tab.href} value={tab.href} disabled={tab.disabled}>{tab.label}</option>)}
+      </select>
+    </div>
     <div ref={navRef} className="tab-nav" style={{
       display: 'flex', gap: 0,
       borderBottom: '1px solid var(--border)',
@@ -109,7 +131,7 @@ export default function TabNav() {
           </div>
         );
         if (tab.disabled) return <div key={tab.href}>{content}</div>;
-        return <Link key={tab.href} href={tab.href} style={{ textDecoration: 'none' }}>{content}</Link>;
+        return <Link key={tab.href} href={tab.href} aria-current={isActive ? 'page' : undefined} style={{ textDecoration: 'none' }}>{content}</Link>;
       })}
     </div>
     {fades.left && (
@@ -126,6 +148,13 @@ export default function TabNav() {
         background: 'linear-gradient(to right, rgba(8,8,8,0), var(--black))',
       }} />
     )}
-    </div>
+    <style jsx>{`
+      .mobile-section-nav { display: none; }
+      @media (max-width: 640px) {
+        .mobile-section-nav { display: block; }
+        .tab-nav { display: none !important; }
+      }
+    `}</style>
+    </nav>
   );
 }

@@ -6,7 +6,7 @@ import { NetworkId } from '@/lib/networks';
 interface Props {
   network: NetworkId;
   onNetworkChange: (n: NetworkId) => void;
-  liveState?: 'live' | 'loading' | 'offline';
+  liveState?: 'live' | 'loading' | 'offline' | 'unavailable';
   lastUpdate?: Date | null;
 }
 
@@ -14,15 +14,17 @@ export default function SiteHeader({ network, onNetworkChange, liveState = 'live
   const dotColor =
     liveState === 'live' ? 'var(--green)' :
     liveState === 'offline' ? 'var(--red)' :
+    liveState === 'unavailable' ? 'var(--text-muted)' :
     'var(--gold-dim)';
 
   const label =
     liveState === 'live' ? 'LIVE' :
     liveState === 'offline' ? 'OFFLINE' :
+    liveState === 'unavailable' ? 'NOT AVAILABLE' :
     'CONNECTING…';
 
   return (
-    <nav className="site-header" style={{
+    <nav aria-label="Site and network" className="site-header" style={{
       position: 'sticky', top: 0, zIndex: 50,
       display: 'flex', alignItems: 'center', justifyContent: 'space-between',
       background: 'rgba(8,8,8,0.9)',

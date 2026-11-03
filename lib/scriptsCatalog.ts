@@ -75,8 +75,8 @@ const STATIC_SCRIPTS: Omit<ScriptEntry, 'lines' | 'lastCommitSha' | 'lastCommitD
       "13 idempotent setup steps that take a fresh Ubuntu 24.04 box to a fully-configured " +
       "Monad node — sysctl tuning, ulimits, IO scheduler, chrony, monad apt repo, " +
       "monad user/dirs, /dev/triedb udev SYMLINK, monad-cruft.timer, UFW + iptables UDP " +
-      "DDoS filter, bootstrap configs from MF_BUCKET. Per-network monad pin: " +
-      "testnet → 0.14.3, mainnet → 0.14.2 (overridable via MONAD_PKG_VERSION).",
+      "DDoS filter, bootstrap configs from MF_BUCKET. Selects the latest apt candidate by default; " +
+      "set MONAD_PKG_VERSION or a per-network override to pin a specific release.",
     highlights: [
       '--network=testnet|mainnet (interactive prompt or flag)',
       '--node-type=validator|full (different node.toml templates)',

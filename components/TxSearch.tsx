@@ -38,6 +38,7 @@ export default function TxSearch() {
     >
       <input
         type="text"
+        aria-label="Transaction hash"
         value={q}
         onChange={(e) => { setQ(e.target.value); if (err) setErr(null); }}
         placeholder="Search transaction by hash: 0x…"

@@ -8,7 +8,7 @@ interface Props {
 
 export default function NetworkSwitch({ current, onChange }: Props) {
   return (
-    <div style={{
+    <div role="group" aria-label="Select network" style={{
       display: 'flex', gap: 4,
       background: 'var(--surface2)',
       border: '1px solid var(--border)',
@@ -19,6 +19,9 @@ export default function NetworkSwitch({ current, onChange }: Props) {
         return (
           <button
             key={net.id}
+            type="button"
+            aria-pressed={current === net.id}
+            disabled={!net.active}
             onClick={() => net.active && onChange(net.id)}
             className="net-btn"
             style={{

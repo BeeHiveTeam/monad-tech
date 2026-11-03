@@ -92,7 +92,7 @@ function Field({ label, value, mono, link }: {
   label: string; value?: string | null; mono?: boolean; link?: string;
 }) {
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: '160px 1fr', gap: 8, padding: '10px 0', borderBottom: '1px solid var(--border)' }}>
+    <div className="validator-detail-field" style={{ display: 'grid', gridTemplateColumns: '160px minmax(0, 1fr)', gap: 8, padding: '10px 0', borderBottom: '1px solid var(--border)' }}>
       <span style={{ fontSize: 11, color: 'var(--text-muted)', letterSpacing: '0.06em', textTransform: 'uppercase', alignSelf: 'center' }}>
         {label}
       </span>
@@ -175,7 +175,7 @@ export default function ValidatorDetailPage() {
           ) : data ? (
             <>
               {/* Header card */}
-              <div className="card" style={{ padding: '24px', marginBottom: 16 }}>
+              <div className="card validator-detail-card" style={{ padding: '24px', marginBottom: 16 }}>
                 <div style={{ display: 'flex', alignItems: 'flex-start', gap: 20, flexWrap: 'wrap' }}>
                   {/* Legacy HEALTH gauge removed 2026-05-21 per audit R7: showed
                       same 3-axis number as /validators table "Score" column +
@@ -183,8 +183,8 @@ export default function ValidatorDetailPage() {
                       saw three "scores" for one validator. Composite is now
                       canonical; legacy health score is one of its 6 axes. */}
 
-                  <div style={{ flex: 1, minWidth: 200 }}>
-                    <h1 style={{ fontFamily: 'Bebas Neue, sans-serif', fontSize: 22, color: 'var(--gold)', letterSpacing: '0.06em', lineHeight: 1.1, margin: 0, fontWeight: 400 }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <h1 style={{ fontFamily: 'Bebas Neue, sans-serif', fontSize: 22, color: 'var(--gold)', letterSpacing: '0.06em', lineHeight: 1.3, margin: 0, fontWeight: 400, overflowWrap: 'anywhere' }}>
                       {data.info?.moniker ?? 'Unknown Validator'}
                     </h1>
                     <div style={{ fontFamily: 'DM Mono, monospace', fontSize: 12, color: 'var(--text-muted)', marginTop: 4, wordBreak: 'break-all' }}>
@@ -239,7 +239,7 @@ export default function ValidatorDetailPage() {
                   with sub-line noting per-ID + count when multi-ID. Pre-fix [[H2]]:
                   showed per-ID stake (25M) alongside auth-rolled participation %
                   (denom 102M), making the % impossible to reproduce from displayed inputs. */}
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 10, marginBottom: 16 }}>
+              <div className="validator-detail-stats" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 10, marginBottom: 16 }}>
                 {(() => {
                   const idCount = data.validatorIds?.length ?? 0;
                   const isMultiId = idCount > 1;
@@ -251,20 +251,20 @@ export default function ValidatorDetailPage() {
                   const apr = data.realizedApr;
                   return [
                     { label: 'Current stake', value: data.currentStakeMon != null ? `${data.currentStakeMon.toLocaleString('en-US', { maximumFractionDigits: 2 })} MON` : '—' },
-                    { label: isMultiId ? 'Auth epoch snapshot stake' : 'Epoch snapshot stake', value: formatStake(authStake), sub: stakeSub },
-                    { label: 'Commission', value: formatCommission(data.info?.commissionPct) },
-                    { label: 'Projected APR (delegator)', value: apr ? `${apr.aprDelegator.toFixed(1)}%` : '—',
-                      sub: apr ? `gross ${apr.aprGross.toFixed(1)}% · 18 MON/block · assumed 0.3s` : undefined },
-                    { label: 'Blocks produced', value: data.stats.attributionComplete === false ? '—' : data.stats.blocksProduced.toLocaleString('en-US') },
-                    { label: 'Block share', value: data.stats.attributionComplete === false ? '—' : `${data.stats.sharePct.toFixed(2)}%` },
                     { label: 'Participation', value: data.stats.participationPct == null ? '—' : `${Math.min(data.stats.participationPct, 100).toFixed(0)}%`,
                       sub: data.stats.participationPct != null && data.stats.participationPct > 100 ? `raw ${data.stats.participationPct.toFixed(0)}% (high stake)` : undefined },
+                    { label: 'Projected APR (delegator)', value: apr ? `${apr.aprDelegator.toFixed(1)}%` : '—',
+                      sub: apr ? `gross ${apr.aprGross.toFixed(1)}% · 18 MON/block · assumed 0.3s` : undefined },
+                    { label: 'Commission', value: formatCommission(data.info?.commissionPct) },
+                    { label: isMultiId ? 'Auth epoch snapshot stake' : 'Epoch snapshot stake', value: formatStake(authStake), sub: stakeSub },
+                    { label: 'Blocks produced', value: data.stats.attributionComplete === false ? '—' : data.stats.blocksProduced.toLocaleString('en-US') },
+                    { label: 'Block share', value: data.stats.attributionComplete === false ? '—' : `${data.stats.sharePct.toFixed(2)}%` },
                     { label: 'Total txs', value: data.stats.attributionComplete === false ? '—' : data.stats.totalTxs.toLocaleString('en-US') },
                     { label: 'Sample size', value: `${data.context.sampleSize.toLocaleString()} blocks` },
                     { label: 'Producers in window', value: data.context.producersInWindow.toString() },
                   ];
                 })().map(s => (
-                  <div key={s.label} className="card" style={{ padding: '14px 18px' }}>
+                  <div key={s.label} className="card" style={{ padding: '14px 18px', minWidth: 0, overflowWrap: 'anywhere' }}>
                     <div style={{ fontSize: 10, color: 'var(--text-muted)', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 4 }}>{s.label}</div>
                     <div style={{ fontFamily: 'Bebas Neue, sans-serif', fontSize: 20, color: 'var(--gold)', letterSpacing: '0.04em' }}>{s.value}</div>
                     {s.sub && <div style={{ fontSize: 10, color: 'rgba(138,136,112,0.6)', marginTop: 2 }}>{s.sub}</div>}
@@ -274,10 +274,10 @@ export default function ValidatorDetailPage() {
 
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(340px, 100%), 1fr))', gap: 16, marginBottom: 16 }}>
                 {/* Registry info */}
-                <div className="card" style={{ padding: '20px 24px' }}>
-                  <div style={{ fontFamily: 'Bebas Neue, sans-serif', fontSize: 14, letterSpacing: '0.12em', color: 'var(--gold)', marginBottom: 14 }}>
+                <div className="card validator-detail-card" style={{ padding: '20px 24px' }}>
+                  <h2 style={{ fontFamily: 'Bebas Neue, sans-serif', fontSize: 16, fontWeight: 400, letterSpacing: '0.12em', color: 'var(--gold)', margin: '0 0 14px' }}>
                     VALIDATOR INFO
-                  </div>
+                  </h2>
                   <Field label="Moniker" value={data.info?.moniker} />
                   <Field label="Status" value={data.registered && data.isActiveSet === false ? 'REGISTERED · OUTSIDE ACTIVE SET' : hs.label} />
                   <Field label="Validator ID" value={data.info?.validatorId?.toString()} />
@@ -300,13 +300,15 @@ export default function ValidatorDetailPage() {
                 </div>
 
                 {/* Recent blocks */}
-                <div className="card" style={{ padding: '20px 24px' }}>
-                  <div style={{ fontFamily: 'Bebas Neue, sans-serif', fontSize: 14, letterSpacing: '0.12em', color: 'var(--gold)', marginBottom: 14 }}>
+                <div className="card validator-detail-card" style={{ padding: '20px 24px' }}>
+                  <h2 style={{ fontFamily: 'Bebas Neue, sans-serif', fontSize: 16, fontWeight: 400, letterSpacing: '0.12em', color: 'var(--gold)', margin: '0 0 14px' }}>
                     RECENT BLOCKS ({data.recentBlocks.length})
-                  </div>
+                  </h2>
                   {data.recentBlocks.length === 0 ? (
                     <div style={{ color: 'var(--text-muted)', fontSize: 13, padding: '20px 0', textAlign: 'center' }}>
-                      No blocks found in last {data.context.sampleSize} sampled
+                      {data.stats.attributionComplete === false
+                        ? 'Block attribution is unavailable for this sample.'
+                        : `No blocks found in the last ${data.context.sampleSize} sampled blocks.`}
                     </div>
                   ) : (
                     <div style={{ overflowX: 'auto' }}>

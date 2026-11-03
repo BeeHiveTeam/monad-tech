@@ -8,14 +8,14 @@ interface Props {
 
 export default function StatCard({ label, value, sub, icon, accent }: Props) {
   return (
-    <div className="card card-hover" style={{ padding: '20px 24px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+    <div className="card card-hover stat-card" style={{ padding: '20px 24px', display: 'flex', flexDirection: 'column', gap: 8 }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <span style={{ fontSize: 11, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--text-muted)' }}>
+        <span className="stat-card-label" style={{ fontSize: 11, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--text-muted)' }}>
           {label}
         </span>
         {icon && <span style={{ color: 'var(--gold)', opacity: 0.7 }}>{icon}</span>}
       </div>
-      <div style={{
+      <div className="stat-card-value" style={{
         fontSize: 28, fontFamily: 'Bebas Neue, sans-serif', letterSpacing: '0.06em',
         color: accent ? 'var(--gold)' : 'var(--text)',
         lineHeight: 1,
