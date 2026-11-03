@@ -78,3 +78,14 @@ Run `npm test` for offline regression checks, `npx tsc --noEmit --incremental fa
 for types, and `npm run build` for a production build. A separate verification
 server can use `MONAD_BACKGROUND_DISABLED=1` to avoid duplicating the running
 background collectors. That flag must not be set on the production service.
+
+### Current stake and BeeHive identity
+
+Validator responses expose `currentStakeMon` separately from `stakeMon` (epoch snapshot).
+The current value is summed across all owned validator IDs; an unavailable slot stays
+unknown. Performance denominators continue to use the epoch snapshot, and canonical
+consensus membership determines active status. Registered operators outside that set
+are labelled registered/inactive rather than missing in list and detail views.
+BeeHive's Testnet auth is `0x745a60bec9a50981871dcb1616869ce9139a611b` (ID 279).
+The operator page reads registration, commission, stake and membership from the
+network-scoped chain registry and exposes its timestamp/staleness; no stake is hardcoded.

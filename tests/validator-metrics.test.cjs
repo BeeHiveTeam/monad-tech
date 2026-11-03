@@ -172,3 +172,25 @@ test('mainnet detail is registry-only and cannot fetch or borrow any block sampl
   assert.equal(response.body.stats.participationPct,null);
   assert.equal(response.body.realizedApr,null);
 });
+
+test('current stake is separate from epoch snapshot and consensus membership', () => {
+  const { computeAuthStake } = loadTS('lib/validatorMetrics.ts');
+  const address = '0x745a60bec9a50981871dcb1616869ce9139a611b';
+  const chain = new Map([[279, { authAddress: address, stakeMon: 0, activeStakeMon: 100000 }]]);
+  const stake = computeAuthStake(address, chain, new Set());
+  assert.equal(stake.currentStakeMon, 100000);
+  assert.equal(stake.stakeMon, 0);
+  assert.equal(stake.activeIds.length, 0);
+  chain.set(280, { authAddress: address, stakeMon: 50, activeStakeMon: 60 });
+  assert.equal(computeAuthStake(address, chain, new Set([280])).currentStakeMon, 100060);
+  chain.set(281, { authAddress: address, stakeMon: 0 });
+  assert.equal(computeAuthStake(address, chain, new Set()).currentStakeMon, null);
+});
+
+test('BeeHive fallback uses current testnet auth and never identifies old address or mainnet', () => {
+  const { getValidatorInfo } = loadTS('lib/validator-monikers.ts');
+  const address = '0x745a60bec9a50981871dcb1616869ce9139a611b';
+  assert.equal(getValidatorInfo(address, 'testnet').moniker, 'BeeHive');
+  assert.equal(getValidatorInfo(address, 'mainnet'), null);
+  assert.equal(getValidatorInfo('0x063882309dff155ad967bcf08db42e0ee799b602', 'testnet'), null);
+});

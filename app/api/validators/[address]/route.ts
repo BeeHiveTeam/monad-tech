@@ -249,6 +249,7 @@ export async function GET(
       moniker: info?.moniker ?? null,
       info,
       stakeMon,
+      currentStakeMon: auth.currentStakeMon,
       validatorIds: auth.validatorIds,
       activeValidatorIdsCount: auth.activeIds.length,
       commissionPct: info?.commissionPct ?? null,

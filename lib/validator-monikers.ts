@@ -1,4 +1,5 @@
 import type { NetworkId } from './networks';
+import { BEEHIVE_TESTNET_ADDRESS } from './beehive';
 
 export interface ValidatorInfo {
   moniker: string;
@@ -14,11 +15,11 @@ export interface ValidatorInfo {
 
 // Static fallback for known validators. Network-scoped so we don't leak
 // testnet identity onto a mainnet query (audit C3). BeeHive's testnet auth
-// address `0x063882309dff…b602` is NOT registered on mainnet today; if we
+// address `0x745a60bec9a5…11b` is NOT registered on mainnet today; if we
 // ever run a mainnet validator with a different auth, add it under 'mainnet'.
 const STATIC_INFO: Record<NetworkId, Record<string, ValidatorInfo>> = {
   testnet: {
-    '0x063882309dff155ad967bcf08db42e0ee799b602': {
+    [BEEHIVE_TESTNET_ADDRESS]: {
       moniker: 'BeeHive',
       website: 'https://bee-hive.work',
       description: 'BeeHive Validator — professional Monad testnet operator',
@@ -28,7 +29,7 @@ const STATIC_INFO: Record<NetworkId, Record<string, ValidatorInfo>> = {
 };
 
 // Per-network registry — testnet and mainnet have separate validator sets,
-// and mainnet currently has none on-chain. Keeping them isolated prevents
+// Keeping them isolated prevents
 // one network's data from leaking into the other after a network switch.
 const _registries: Map<NetworkId, Map<string, ValidatorInfo>> = new Map();
 const _registryUpdatedAt: Map<NetworkId, number> = new Map();

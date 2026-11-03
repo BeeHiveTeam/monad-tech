@@ -253,6 +253,7 @@ async function computeValidators(network: NetworkId) {
         ...v,
         moniker: info?.moniker ?? null,
         stakeMon,
+        currentStakeMon: auth.currentStakeMon,
         validatorIds: auth.validatorIds,           // every ID under this auth (1 for single-ID operators)
         activeValidatorIdsCount: auth.activeIds.length,
         commissionPct: info?.commissionPct ?? null,

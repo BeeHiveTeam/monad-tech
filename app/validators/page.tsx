@@ -26,6 +26,7 @@ interface Validator {
   participationPct: number | null;
   attributionComplete?: boolean;
   health: Health;
+  currentStakeMon?: number | null;
   stakeMon?: number;
   commissionPct?: number;
   registered?: boolean;
@@ -361,7 +362,7 @@ function ValidatorsPageInner() {
     if (view === 'delegator') {
       filtered = filtered.filter(v => v.isActiveSet);
       if (maxCommission < 100) filtered = filtered.filter(v => (v.commissionPct ?? 100) <= maxCommission);
-      if (minStake > 0)        filtered = filtered.filter(v => (v.stakeMon ?? 0) >= minStake);
+      if (minStake > 0)        filtered = filtered.filter(v => (v.currentStakeMon ?? 0) >= minStake);
       if (hideWhales)          filtered = filtered.filter(v => {
         const share = totalActiveStake > 0 ? (v.stakeMon ?? 0) / totalActiveStake * 100 : 0;
         return share < 5;
@@ -380,7 +381,7 @@ function ValidatorsPageInner() {
         case 'share':   diff = a.sharePct - b.sharePct; break;
         case 'txs':        diff = a.totalTxs - b.totalTxs; break;
         case 'age':        diff = b.ageSeconds - a.ageSeconds; break;
-        case 'stake':      diff = (a.stakeMon ?? 0) - (b.stakeMon ?? 0); break;
+        case 'stake':      diff = (a.currentStakeMon ?? 0) - (b.currentStakeMon ?? 0); break;
         case 'commission': diff = (a.commissionPct ?? 0) - (b.commissionPct ?? 0); break;
         case 'apr':        diff = (a.aprDelegator ?? -1) - (b.aprDelegator ?? -1); break;
       }
@@ -727,7 +728,7 @@ function ValidatorsPageInner() {
                         <ResizeHandle colKey="address" onMouseDown={startResize('address')} active={resizing === 'address'} />
                       </th>
                       <th style={thStyle('stake')} onClick={() => handleSort('stake')}>
-                        Stake <SortIcon active={sortKey === 'stake'} dir={sortDir} />
+                        Current stake (MON) <SortIcon active={sortKey === 'stake'} dir={sortDir} />
                         <ResizeHandle colKey="stake" onMouseDown={startResize('stake')} active={resizing === 'stake'} />
                       </th>
                       <th style={thStyle('commission')} onClick={() => handleSort('commission')}>
@@ -791,7 +792,7 @@ function ValidatorsPageInner() {
                   <tbody>
                     {processed.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE).map((v, idx) => {
                       const i = (page - 1) * PAGE_SIZE + idx;   // absolute rank across pages
-                      const hs = HEALTH_STYLE[v.health];
+                      const hs = v.registered && v.isActiveSet === false ? { fg: '#C9A84C', bg: 'rgba(201,168,76,0.1)', label: 'REGISTERED · INACTIVE' } : HEALTH_STYLE[v.health];
                       const uptimeDisplay = Math.min(v.participationPct ?? 0, 100);
                       const uptimeColor =
                         uptimeDisplay < 50 ? '#E05252' :
@@ -872,8 +873,8 @@ function ValidatorsPageInner() {
                           </td>
                           {/* Stake */}
                           <td style={{ textAlign: 'right', fontFamily: 'DM Mono, monospace', fontSize: 12, whiteSpace: 'nowrap' }}>
-                            {v.stakeMon != null
-                              ? <span style={{ color: 'var(--gold)' }}>{(v.stakeMon / 1_000_000).toFixed(1)}M</span>
+                            {v.currentStakeMon != null
+                              ? <span title={`Epoch snapshot: ${v.stakeMon?.toLocaleString('en-US')} MON`} style={{ color: 'var(--gold)' }}>{v.currentStakeMon.toLocaleString('en-US', { maximumFractionDigits: 2 })}</span>
                               : <span style={{ color: 'var(--text-muted)' }}>—</span>}
                           </td>
                           {/* Commission */}

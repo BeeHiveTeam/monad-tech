@@ -14,6 +14,8 @@ import CompositeScoreCard, { type CompositeScore } from '@/components/CompositeS
 type Health = 'active' | 'slow' | 'missing' | 'unknown';
 
 interface ValidatorDetail {
+  registered?: boolean;
+  isActiveSet?: boolean;
   address: string;
   info: {
     moniker?: string;
@@ -33,6 +35,7 @@ interface ValidatorDetail {
     blocksPerYearExpected: number;
     blocksPerYearRealized: number;
   } | null;
+  currentStakeMon?: number | null;
   stakeMon?: number;              // auth-rolled stake across all owned IDs
   validatorIds?: number[];        // all IDs owned by this auth
   activeValidatorIdsCount?: number;
@@ -197,7 +200,7 @@ export default function ValidatorDetailPage() {
                       }}>
                         <span style={{ width: 6, height: 6, borderRadius: '50%', background: hs.fg,
                           animation: data.stats.health === 'active' ? 'pulse 2s infinite' : 'none' }} />
-                        {hs.label}
+                        {data.registered && data.isActiveSet === false ? 'REGISTERED · OUTSIDE ACTIVE SET' : hs.label}
                       </span>
                       {data.stats.lastBlockTs > 0 && (
                         <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
@@ -247,7 +250,8 @@ export default function ValidatorDetailPage() {
                     : undefined;
                   const apr = data.realizedApr;
                   return [
-                    { label: isMultiId ? 'Auth Stake' : 'Stake', value: formatStake(authStake), sub: stakeSub },
+                    { label: 'Current stake', value: data.currentStakeMon != null ? `${data.currentStakeMon.toLocaleString('en-US', { maximumFractionDigits: 2 })} MON` : '—' },
+                    { label: isMultiId ? 'Auth epoch snapshot stake' : 'Epoch snapshot stake', value: formatStake(authStake), sub: stakeSub },
                     { label: 'Commission', value: formatCommission(data.info?.commissionPct) },
                     { label: 'Projected APR (delegator)', value: apr ? `${apr.aprDelegator.toFixed(1)}%` : '—',
                       sub: apr ? `gross ${apr.aprGross.toFixed(1)}% · 18 MON/block · assumed 0.3s` : undefined },
@@ -275,7 +279,7 @@ export default function ValidatorDetailPage() {
                     VALIDATOR INFO
                   </div>
                   <Field label="Moniker" value={data.info?.moniker} />
-                  <Field label="Status" value={hs.label} />
+                  <Field label="Status" value={data.registered && data.isActiveSet === false ? 'REGISTERED · OUTSIDE ACTIVE SET' : hs.label} />
                   <Field label="Validator ID" value={data.info?.validatorId?.toString()} />
                   <Field label="Auth Address" value={data.address} mono />
                   <Field label="Public Key (secp)" value={data.info?.secp} mono />

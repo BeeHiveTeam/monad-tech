@@ -25,6 +25,7 @@ interface BeeHiveData {
     discordUrl: string | null;
     website: string;
   };
+  validator?: { registered: boolean | null; isActiveSet: boolean | null; currentStakeMon: number | null; snapshotStakeMon: number | null; commissionPct: number | null; stale: boolean; ids: number[] };
   fetchedAt: number;
 }
 
@@ -47,16 +48,17 @@ export default function BeeHivePage() {
 
   useEffect(() => {
     let cancelled = false;
+    setData(null); setNetStats(null);
     const load = async () => {
       try {
         const [bhRes, statsRes] = await Promise.all([
-          fetch('/api/beehive', { cache: 'no-store' }),
+          fetch(`/api/beehive?network=${network}`, { cache: 'no-store' }),
           fetch(`/api/stats?network=${network}`, { cache: 'no-store' }),
         ]);
         if (!bhRes.ok) throw new Error(`HTTP ${bhRes.status}`);
         const bh = await bhRes.json() as BeeHiveData;
         const st = statsRes.ok ? await statsRes.json() as NetworkStats : null;
-        if (!cancelled) { setData(bh); setNetStats(st); setErr(null); }
+        if (!cancelled) { setData(network === 'testnet' ? bh : null); setNetStats(st); setErr(null); }
       } catch (e) { if (!cancelled) setErr(String(e)); }
     };
     load();
@@ -77,7 +79,7 @@ export default function BeeHivePage() {
         <SiteHeader
           network={network}
           onNetworkChange={setNetwork}
-          liveState="live"
+          liveState={err ? 'offline' : data ? 'live' : 'loading'}
           lastUpdate={null}
         />
         <main className="site-main">
@@ -149,7 +151,7 @@ export default function BeeHivePage() {
           </div>
 
           {/* STATUS BANNER */}
-          {network === 'testnet' && data && !data.configured.validatorAddress && (
+          {network === 'testnet' && data?.validator && (
             <div style={{
               padding: '14px 20px', marginBottom: 16,
               background: 'rgba(232,160,32,0.08)',
@@ -158,10 +160,10 @@ export default function BeeHivePage() {
               borderRadius: 6, fontSize: 12, color: 'var(--text)',
             }}>
               <strong style={{ color: '#E8A020', textTransform: 'uppercase', letterSpacing: '0.05em', fontSize: 11 }}>
-                Awaiting Delegation
+                {data.validator?.stale ? 'Registry data stale' : data.validator?.registered == null ? 'Registration unknown' : data.validator?.isActiveSet ? 'Active consensus validator' : data.validator?.registered ? 'Registered · outside active set' : 'Not registered'}
               </strong>
               <span style={{ marginLeft: 10, color: 'var(--text-muted)' }}>
-                Node is running and healthy. Needs 10M MON total delegation to enter the active set (currently 200 validators · Monad Foundation delegates 15–25B MON in year 1).
+                Current stake and epoch snapshot are shown separately. Active-set membership follows the on-chain consensus set.
               </span>
             </div>
           )}
@@ -178,6 +180,8 @@ export default function BeeHivePage() {
               gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))',
               gap: 12, marginBottom: 20,
             }}>
+              <Stat label="Current stake" value={data?.validator?.currentStakeMon != null ? `${data.validator.currentStakeMon.toLocaleString('en-US', { maximumFractionDigits: 2 })} MON` : '—'} sub={data?.validator?.stale ? 'stale registry snapshot' : 'on-chain active stake'} accent />
+              <Stat label="Epoch snapshot stake" value={data?.validator?.snapshotStakeMon != null ? `${data.validator.snapshotStakeMon.toLocaleString('en-US', { maximumFractionDigits: 2 })} MON` : '—'} sub="separate from current stake" />
               <Stat label="Client version" value={data?.clientVersion ?? '—'} accent />
               <Stat
                 label="Our block height"
@@ -205,8 +209,8 @@ export default function BeeHivePage() {
               />
               <Stat
                 label="Commission"
-                value={data?.configured.validatorAddress ? `${data.configured.commissionPct}%` : 'TBD'}
-                sub={data?.configured.validatorAddress ? 'set on-chain' : 'set at activation'}
+                value={data?.validator?.commissionPct != null ? `${data.validator.commissionPct}%` : '—'}
+                sub="on-chain commission"
               />
             </div>
             </>

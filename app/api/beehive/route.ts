@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import { apiError } from '@/lib/apiError';
 import { parsePrometheus, findLatest } from '@/lib/prom-parser';
 import { NODE_METRICS_URL } from '@/lib/config';
+import { BEEHIVE_TESTNET_ADDRESS } from '@/lib/beehive';
+import { ensureRegistryLoaded, getChainDataById, getConsensusIds, getRegistryStatus } from '@/lib/validator-registry';
+import { computeAuthStake } from '@/lib/validatorMetrics';
 
 export const dynamic = 'force-dynamic';
 
@@ -73,8 +76,24 @@ export async function GET(req: NextRequest) {
     // Sample timestamp — used as "last heartbeat from our node"
     const lastSeenMs = nodeInfo?.timestampMs ?? Date.now();
 
+    await ensureRegistryLoaded(LOCAL_RPC_URL, 'testnet');
+    const registry = getRegistryStatus('testnet');
+    const auth = computeAuthStake(BEEHIVE_TESTNET_ADDRESS, getChainDataById('testnet'), getConsensusIds('testnet'));
+    const registered = registry.complete ? auth.validatorIds.length > 0 : null;
+    const chain = getChainDataById('testnet').get(auth.validatorIds[0]);
+    const validator = {
+      address: BEEHIVE_TESTNET_ADDRESS,
+      ids: auth.validatorIds,
+      registered,
+      isActiveSet: registry.complete ? auth.activeIds.length > 0 : null,
+      currentStakeMon: registered ? auth.currentStakeMon : null,
+      snapshotStakeMon: registered ? auth.stakeMon : null,
+      commissionPct: chain?.commissionPct ?? null,
+      stale: registry.stale,
+      fetchedAt: registry.fetchedAt,
+    };
     const configured = {
-      validatorAddress: process.env.BEEHIVE_VALIDATOR_ADDRESS ?? null,
+      validatorAddress: BEEHIVE_TESTNET_ADDRESS,
       commissionPct: Number(process.env.BEEHIVE_COMMISSION_PCT ?? '5'),
       minDelegation: Number(process.env.BEEHIVE_MIN_DELEGATION ?? '100'),
       twitter: process.env.BEEHIVE_TWITTER ?? 'BeeHive_NT',
@@ -108,6 +127,7 @@ export async function GET(req: NextRequest) {
       },
       lastSeenMs,
       configured,
+      validator,
       fetchedAt: Date.now(),
     }, {
       headers: { 'Cache-Control': 'public, s-maxage=10, stale-while-revalidate=30' },

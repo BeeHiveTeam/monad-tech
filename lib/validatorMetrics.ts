@@ -167,7 +167,7 @@ export function computeValidatorMetrics(input: ValidatorMetricsInput): Validator
  * getConsensusValidatorSet() hasn't yet returned.
  */
 export function computeTotalActiveStake(
-  chainDataById: Map<number, { authAddress: string; stakeMon: number }>,
+  chainDataById: Map<number, { authAddress: string; stakeMon: number; activeStakeMon?: number }>,
   consensusIds: Set<number>,
   fallbackThreshold = 10_000_000,
 ): number {
@@ -195,22 +195,25 @@ export function computeTotalActiveStake(
  */
 export function computeAuthStake(
   authAddress: string,
-  chainDataById: Map<number, { authAddress: string; stakeMon: number }>,
+  chainDataById: Map<number, { authAddress: string; stakeMon: number; activeStakeMon?: number }>,
   consensusIds: Set<number>,
-): { stakeMon: number; validatorIds: number[]; activeIds: number[] } {
+): { stakeMon: number; currentStakeMon: number | null; validatorIds: number[]; activeIds: number[] } {
   const target = authAddress.toLowerCase();
   let stakeMon = 0;
+  let currentStakeMon: number | null = 0;
   const validatorIds: number[] = [];
   const activeIds: number[] = [];
   for (const [id, data] of chainDataById) {
     if (data.authAddress.toLowerCase() !== target) continue;
     validatorIds.push(id);
     stakeMon += data.stakeMon ?? 0;
+    currentStakeMon = currentStakeMon != null && data.activeStakeMon != null
+      ? currentStakeMon + data.activeStakeMon : null;
     if (consensusIds.has(id)) activeIds.push(id);
   }
   validatorIds.sort((a, b) => a - b);
   activeIds.sort((a, b) => a - b);
-  return { stakeMon, validatorIds, activeIds };
+  return { stakeMon, currentStakeMon: validatorIds.length ? currentStakeMon : null, validatorIds, activeIds };
 }
 
 /**
